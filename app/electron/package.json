@@ -1,0 +1,17 @@
+{
+  "name": "sa-electron",
+  "private": true,
+  "version": "1.0.0",
+  "main": "main.js",
+  "dependencies": {
+    "electron-store": "^8.2.0"
+  },
+  "devDependencies": {
+    "electron": "^31.3.0",
+    "electronmon": "^2.0.2"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electronmon ."
+  }
+}

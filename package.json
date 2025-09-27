@@ -1,0 +1,16 @@
+{
+  "name": "sistem-akademik-root",
+  "private": true,
+  "version": "1.0.0",
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "cross-env": "^7.0.3",
+    "wait-on": "^8.0.0"
+  },
+  "scripts": {
+    "dev:server": "npm --prefix server run dev",
+    "dev:renderer": "npm --prefix app/renderer run dev",
+    "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development RENDERER_URL=http://localhost:5173 npm --prefix app/electron run dev",
+    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:renderer\" \"npm:dev:electron\""
+  }
+}

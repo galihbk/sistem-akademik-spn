@@ -1,0 +1,64 @@
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Dependency directories
+app/renderer/node_modules/
+app/electron/node_modules/
+server/node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+release/
+*.log
+
+# Vite & Electron cache
+.vite/
+.vscode/
+.cache/
+electron-builder.yml
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Database files / dumps
+*.sqlite
+*.db
+*.sql
+*.dump
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Excel / Import Data
+*.xlsx
+*.xls
+*.csv
+
+# PDF / Upload files
+*.pdf
+assets/uploads/
+uploads/
+
+# IDE & editor settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test coverage
+coverage/
+
+# Logs
+logs/
+*.log
