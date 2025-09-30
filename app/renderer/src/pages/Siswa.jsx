@@ -1,125 +1,262 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useShell } from "../context/ShellContext";
+
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-export default function SiswaPage(){
+export default function Siswa() {
+  const { angkatan: angkatanFromShell } = useShell(); // nilai dari Shell (boleh kosong)
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
-  const [sortBy, setSortBy] = useState("nama");      // 'nama' | 'nosis'
-  const [sortDir, setSortDir] = useState("asc");     // 'asc'  | 'desc'
-  const [data, setData] = useState({ items: [], total: 0, page: 1, limit: 20 });
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
+  const [limit] = useState(20);
+  const [sortBy, setSortBy] = useState("nama");
+  const [sortDir, setSortDir] = useState("asc");
 
-  // debounce ketik 300ms
-  const debRef = useRef(0);
-  function onType(val){
-    setQ(val);
-    clearTimeout(debRef.current);
-    debRef.current = setTimeout(()=>{ setPage(1); load(1, sortBy, sortDir, val); }, 300);
-  }
+  // ---- Filter Angkatan (di halaman) ----
+  const [angkatanOpts, setAngkatanOpts] = useState([]);
+  const [angkatanFilter, setAngkatanFilter] = useState(""); // "" = semua
 
-  async function load(pageArg = page, sb = sortBy, sd = sortDir, qArg = q) {
-    try{
-      setLoading(true); setErr("");
-      const token = await window.authAPI.getToken();
-      const url = new URL(`${API}/siswa`);
-      if (qArg.trim()) url.searchParams.set("q", qArg.trim());
-      url.searchParams.set("page", String(pageArg));
-      url.searchParams.set("limit", "20");
-      url.searchParams.set("sort_by", sb);
-      url.searchParams.set("sort_dir", sd);
-      const res  = await fetch(url, { headers: { Authorization: `Bearer ${token}` }});
-      const json = await res.json();
-      if(!res.ok) throw new Error(json.message || "Gagal memuat");
-      setData(json);
-    }catch(e){ setErr(e.message || "Error"); }
-    finally{ setLoading(false); }
-  }
+  // load opsi angkatan 1x
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const token = await window.authAPI?.getToken?.();
+        const r = await fetch(`${API}/ref/angkatan`, {
+          headers: {
+            Accept: "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+        if (!r.ok) {
+          console.error(
+            "[SiswaIndex] load angkatan:",
+            r.status,
+            await r.text()
+          );
+          return;
+        }
+        const data = await r.json();
+        if (alive) setAngkatanOpts(Array.isArray(data.items) ? data.items : []);
+      } catch (e) {
+        console.error("[SiswaIndex] load angkatan error:", e);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
-  useEffect(()=>{ load(); /* eslint-disable-next-line */ }, [page, sortBy, sortDir]);
+  // nilai angkatan efektif yang dipakai query
+  const angkatanEffective = angkatanFilter || angkatanFromShell || "";
 
-  // toggle sort saat klik header
-  function toggleSort(column){
-    if (sortBy === column) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortBy(column);
-      setSortDir('asc');
-    }
-  }
+  // build URL
+  const url = useMemo(() => {
+    const u = new URL(`${API}/siswa`);
+    if (q) u.searchParams.set("q", q);
+    if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
+    u.searchParams.set("page", String(page));
+    u.searchParams.set("limit", String(limit));
+    u.searchParams.set("sort_by", sortBy);
+    u.searchParams.set("sort_dir", sortDir);
+    return u.toString();
+  }, [q, page, limit, sortBy, sortDir, angkatanEffective]);
 
-  function sortIcon(column){
-    if (sortBy !== column) return '↕';
-    return sortDir === 'asc' ? '↑' : '↓';
-  }
+  // fetch data
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const token = await window.authAPI?.getToken?.();
+        const r = await fetch(url, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        const data = await r.json();
+        if (!alive) return;
+        setItems(Array.isArray(data.items) ? data.items : []);
+        setTotal(data.total ?? 0);
+      } catch (e) {
+        if (!alive) return;
+        setItems([]);
+        setTotal(0);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [url]);
 
-  function gotoDetail(nosis){
-    window.location.hash = `#/siswa/${encodeURIComponent(String(nosis))}`;
-  }
-
-  const totalPages = useMemo(
-    ()=> Math.max(1, Math.ceil((data.total||0)/(data.limit||20))),
-    [data.total, data.limit]
-  );
+  // reset halaman jika salah satu filter (local/shell) berubah
+  useEffect(() => {
+    setPage(1);
+  }, [angkatanFilter, angkatanFromShell]);
 
   return (
-    <div className="grid">
-      <div className="card">
-        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, flexWrap:'wrap'}}>
-          <div>
-            <div style={{fontWeight:800, fontSize:18}}>Siswa</div>
-            <div style={{color:'#94a3b8'}}>Cari by NOSIS atau Nama • Klik header untuk sorting</div>
-          </div>
-          <input
-            className="input"
-            placeholder="Ketik untuk mencari NOSIS / Nama..."
-            value={q}
-            onChange={(e)=>onType(e.target.value)}
-            style={{minWidth:300}}
-          />
+    <>
+      {/* Toolbar */}
+      <div
+        className="card"
+        style={{
+          display: "flex",
+          gap: 12,
+          alignItems: "center",
+          marginBottom: 12,
+        }}
+      >
+        {/* Dropdown Angkatan (halaman) */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label htmlFor="angkatan" className="muted">
+            Angkatan
+          </label>
+          <select
+            id="angkatan"
+            value={angkatanFilter}
+            onChange={(e) => setAngkatanFilter(e.target.value)}
+            style={{
+              background: "#0f1424",
+              border: "1px solid #1f2937",
+              color: "#e5e7eb",
+              borderRadius: 8,
+              padding: "6px 10px",
+              minWidth: 160,
+            }}
+          >
+            <option value="">Semua</option>
+            {angkatanOpts.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
         </div>
-        {err && <div style={{marginTop:8, color:'#fca5a5'}}>⚠ {err}</div>}
+
+        <input
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setPage(1);
+          }}
+          placeholder="Cari nama / nosis ..."
+          style={{
+            background: "#0f1424",
+            border: "1px solid #1f2937",
+            color: "#e5e7eb",
+            borderRadius: 8,
+            padding: "8px 10px",
+            minWidth: 240,
+          }}
+        />
+
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value)}
+          style={{
+            background: "#0f1424",
+            border: "1px solid #1f2937",
+            color: "#e5e7eb",
+            borderRadius: 8,
+            padding: "6px 8px",
+          }}
+        >
+          <option value="nama">Nama</option>
+          <option value="nosis">NOSIS</option>
+        </select>
+
+        <select
+          value={sortDir}
+          onChange={(e) => setSortDir(e.target.value)}
+          style={{
+            background: "#0f1424",
+            border: "1px solid #1f2937",
+            color: "#e5e7eb",
+            borderRadius: 8,
+            padding: "6px 8px",
+          }}
+        >
+          <option value="asc">Asc</option>
+          <option value="desc">Desc</option>
+        </select>
+
+        <div style={{ marginLeft: "auto", color: "#94a3b8" }}>
+          Total: {total}
+        </div>
       </div>
 
-      <div className="card">
-        <table className="table">
+      {/* Tabel */}
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <table className="table" style={{ width: "100%" }}>
           <thead>
             <tr>
-              <th style={{width:180, cursor:'pointer'}} onClick={()=>toggleSort('nosis')}>
-                NOSIS <span style={{opacity:.6, marginLeft:6}}>{sortIcon('nosis')}</span>
-              </th>
-              <th style={{cursor:'pointer'}} onClick={()=>toggleSort('nama')}>
-                Nama <span style={{opacity:.6, marginLeft:6}}>{sortIcon('nama')}</span>
-              </th>
-              <th style={{width:120, textAlign:'right'}}>Aksi</th>
+              <th style={{ textAlign: "left" }}>NOSIS</th>
+              <th style={{ textAlign: "left" }}>Nama</th>
+              <th style={{ textAlign: "left" }}>Angkatan</th>
+              <th style={{ textAlign: "left", width: 1 }}>Aksi</th> {/* NEW */}
             </tr>
           </thead>
           <tbody>
-            {loading ? (
-              <tr><td colSpan="3" style={{padding:14, color:'#94a3b8'}}>Memuat...</td></tr>
-            ) : (data.items||[]).length === 0 ? (
-              <tr><td colSpan="3" style={{padding:14, color:'#94a3b8'}}>Tidak ada data.</td></tr>
-            ) : data.items.map((s)=>(
-              <tr key={s.nosis}>
-                <td><code>{s.nosis}</code></td>
-                <td>{s.nama}</td>
-                <td style={{textAlign:'right'}}>
-                  <button className="btn" onClick={()=>gotoDetail(s.nosis)}>Detail</button>
+            {items.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="muted" style={{ padding: 12 }}>
+                  Tidak ada data.
                 </td>
               </tr>
-            ))}
+            ) : (
+              items.map((r) => {
+                const nosis = r?.nosis ?? "-";
+                const nama = r?.nama ?? "-";
+                const angkatan = r?.kelompok_angkatan ?? "-";
+                const nik = String(r?.nik ?? "").trim(); // <- selalu string
+
+                return (
+                  <tr key={`${r?.id ?? nosis}-${nosis}`}>
+                    <td>{nosis}</td>
+                    <td>{nama}</td>
+                    <td>{angkatan}</td>
+                    <td>
+                      {nik ? (
+                        <button
+                          className="btn"
+                          onClick={() =>
+                            (window.location.hash = `#/siswa/nik/${encodeURIComponent(
+                              nik
+                            )}`)
+                          }
+                        >
+                          Detail
+                        </button>
+                      ) : (
+                        <span className="muted">NIK kosong</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
-
-        <div style={{display:'flex', justifyContent:'space-between', marginTop:10}}>
-          <div style={{color:'#94a3b8'}}>Total: {data.total}</div>
-          <div style={{display:'flex', gap:6}}>
-            <button className="btn" disabled={page<=1} onClick={()=>setPage(p=>p-1)}>Prev</button>
-            <div className="badge">Page {page} / {totalPages}</div>
-            <button className="btn" disabled={page>=totalPages} onClick={()=>setPage(p=>p+1)}>Next</button>
-          </div>
-        </div>
       </div>
-    </div>
+
+      {/* Pagination */}
+      <div
+        style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}
+      >
+        <button
+          className="btn"
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page <= 1}
+        >
+          Prev
+        </button>
+        <span className="badge">Page {page}</span>
+        <button
+          className="btn"
+          onClick={() => setPage((p) => p + 1)}
+          disabled={items.length < limit}
+        >
+          Next
+        </button>
+      </div>
+    </>
   );
 }

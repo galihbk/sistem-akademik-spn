@@ -1,18 +1,26 @@
-const router = require('express').Router();
-const requireAuth = require('../middlewares/requireAuth');
-const c = require('../controllers/siswa.controller');
+const router = require("express").Router();
+const ctrl = require("../controllers/siswa.controller");
 
-router.get('/', requireAuth, c.list);
-router.get('/:nosis', requireAuth, c.detail);
+// List + filter + sort + paginate
+router.get("/", ctrl.list);
 
-// sub-resources per tab
-router.get('/:nosis/sosiometri',         requireAuth, c.listSosiometri);
-router.get('/:nosis/mental',             requireAuth, c.listMental);
-router.get('/:nosis/bk',                 requireAuth, c.listBK);
-router.get('/:nosis/pelanggaran',        requireAuth, c.listPelanggaran);
-router.get('/:nosis/mapel',              requireAuth, c.listMapel);
-router.get('/:nosis/prestasi',           requireAuth, c.listPrestasi);
-router.get('/:nosis/jasmani',            requireAuth, c.listJasmani);
-router.get('/:nosis/riwayat_kesehatan',  requireAuth, c.listRiwayatKesehatan);
+// Detail by NIK (utama)
+router.get("/nik/:nik", ctrl.detailByNik);
+
+// (Legacy) detail by NOSIS bila masih dipakai
+router.get("/nosis/:nosis", ctrl.detailByNosis);
+
+// Relasi by NIK
+router.get("/nik/:nik/sosiometri", ctrl.listSosiometri);
+router.get("/nik/:nik/mental", ctrl.listMental);
+router.get("/nik/:nik/bk", ctrl.listBK);
+router.get("/nik/:nik/pelanggaran", ctrl.listPelanggaran);
+router.get("/nik/:nik/mapel", ctrl.listMapel);
+router.get("/nik/:nik/prestasi", ctrl.listPrestasi);
+router.get("/nik/:nik/jasmani", ctrl.listJasmani);
+router.get("/nik/:nik/riwayat_kesehatan", ctrl.listRiwayatKesehatan);
+
+// Upsert by NIK
+router.post("/upsert", ctrl.upsertByNik);
 
 module.exports = router;
