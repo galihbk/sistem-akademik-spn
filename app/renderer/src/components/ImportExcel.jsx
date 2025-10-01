@@ -30,6 +30,21 @@ export default function ImportExcel({
   const [angkatanOpts, setAngkatanOpts] = useState([]);
   const [angkatan, setAngkatan] = useState("");
 
+  // Warn user if try to close page while loading
+  useEffect(() => {
+    function handleBeforeUnload(e) {
+      if (!loading) return;
+      e.preventDefault();
+      // Chrome requires returnValue to be set.
+      e.returnValue = "Proses import sedang berjalan. Jangan tutup halaman.";
+      return e.returnValue;
+    }
+    if (loading) {
+      window.addEventListener("beforeunload", handleBeforeUnload);
+    }
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [loading]);
+
   // load opsi angkatan (kalau diminta)
   useEffect(() => {
     if (!requireAngkatan) return;
@@ -86,6 +101,7 @@ export default function ImportExcel({
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
       });
+
       const data = await res.json();
 
       // Normalisasi bentuk payload detail -> detailLists
@@ -138,7 +154,10 @@ export default function ImportExcel({
   const current = activeTab ? lists[activeTab] || [] : [];
 
   return (
-    <div className="grid">
+    <div className="grid" style={{ position: "relative" }}>
+      {/* OVERLAY LOADING */}
+      {loading && <LoadingOverlay />}
+
       <div
         className="card"
         style={{
@@ -151,12 +170,32 @@ export default function ImportExcel({
           <div style={{ fontWeight: 800, fontSize: 18 }}>{title}</div>
           <div className="muted">Gunakan file .xlsx sesuai template</div>
         </div>
-        <button className="btn" onClick={back}>
+        <button className="btn" onClick={back} disabled={loading}>
           Kembali
         </button>
       </div>
 
       <div className="card">
+        {/* BANNER PERINGATAN SAAT LOADING */}
+        {loading && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              background: "#1b0c0c",
+              border: "1px solid #7f1d1d",
+              color: "#fca5a5",
+              padding: "8px 12px",
+              borderRadius: 8,
+              marginBottom: 12,
+              fontWeight: 600,
+            }}
+          >
+            ⏳ Import sedang diproses. <b>Jangan tutup / refresh halaman ini</b>{" "}
+            sampai proses selesai.
+          </div>
+        )}
+
         <div
           style={{
             display: "flex",
@@ -169,6 +208,7 @@ export default function ImportExcel({
             type="file"
             accept=".xlsx,.xls"
             onChange={(e) => setFile(e.target.files[0])}
+            disabled={loading}
           />
 
           {requireAngkatan && (
@@ -180,6 +220,7 @@ export default function ImportExcel({
                 id="angkatan"
                 value={angkatan}
                 onChange={(e) => setAngkatan(e.target.value)}
+                disabled={loading}
                 style={{
                   background: "#0f1424",
                   border: "1px solid #1f2937",
@@ -203,15 +244,17 @@ export default function ImportExcel({
             className="btn"
             disabled={!file || loading || (requireAngkatan && !angkatan)}
             onClick={() => requestImport(true)}
+            aria-busy={loading}
           >
-            Cek (Dry Run)
+            {loading ? "Memproses..." : "Cek (Dry Run)"}
           </button>
           <button
             className="btn"
             disabled={!file || loading || (requireAngkatan && !angkatan)}
             onClick={() => requestImport(false)}
+            aria-busy={loading}
           >
-            Mulai Import
+            {loading ? "Memproses..." : "Mulai Import"}
           </button>
         </div>
 
@@ -223,7 +266,7 @@ export default function ImportExcel({
               </div>
             ) : (
               <>
-                <div className="muted">
+                <div className="muted" aria-live="polite">
                   Sheet: <b>{result.sheetUsed}</b> · Rows: <b>{result.rows}</b>{" "}
                   · Header row: <b>{result.headerRow}</b>
                   {Array.isArray(result.weeksDetected) &&
@@ -249,18 +292,21 @@ export default function ImportExcel({
                     active={activeTab === "ok"}
                     onClick={() => setActiveTab("ok")}
                     color={{ border: "#334155", bg: "#0f172a", fg: "#e2e8f0" }}
+                    disabled={loading}
                   />
                   <TabButton
                     label={`Skip: ${result.skip ?? lists.skip.length ?? 0}`}
                     active={activeTab === "skip"}
                     onClick={() => setActiveTab("skip")}
                     color={{ border: "#3f3f46", bg: "#111827", fg: "#fbbf24" }}
+                    disabled={loading}
                   />
                   <TabButton
                     label={`Fail: ${result.fail ?? lists.fail.length ?? 0}`}
                     active={activeTab === "fail"}
                     onClick={() => setActiveTab("fail")}
                     color={{ border: "#7f1d1d", bg: "#1b0c0c", fg: "#fca5a5" }}
+                    disabled={loading}
                   />
                 </div>
 
@@ -275,7 +321,9 @@ export default function ImportExcel({
                       border: "1px solid #1f2937",
                       borderRadius: 12,
                       overflow: "hidden",
+                      opacity: loading ? 0.75 : 1,
                     }}
+                    aria-busy={loading}
                   >
                     <div
                       style={{
@@ -378,11 +426,12 @@ export default function ImportExcel({
 }
 
 /** Tombol tab besar */
-function TabButton({ label, active, onClick, color }) {
+function TabButton({ label, active, onClick, color, disabled }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       style={{
         padding: "12px 18px",
         borderRadius: 12,
@@ -390,14 +439,75 @@ function TabButton({ label, active, onClick, color }) {
         background: color?.bg || "#0f172a",
         color: color?.fg || "#e2e8f0",
         fontWeight: 800,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         minWidth: 150,
         boxShadow: active ? "0 0 0 2px rgba(255,255,255,0.08) inset" : "none",
-        opacity: active ? 1 : 0.9,
+        opacity: disabled ? 0.6 : active ? 1 : 0.9,
       }}
       aria-pressed={active}
+      aria-disabled={disabled}
     >
       {label}
     </button>
+  );
+}
+
+/** Overlay loading full-screen area dalam komponen */
+function LoadingOverlay() {
+  return (
+    <div
+      aria-live="assertive"
+      role="alert"
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "rgba(3,6,17,0.82)",
+        backdropFilter: "blur(2px)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 999,
+      }}
+    >
+      <div
+        style={{
+          display: "grid",
+          gap: 12,
+          placeItems: "center",
+          padding: 20,
+          borderRadius: 14,
+          border: "1px solid #1f2937",
+          background: "rgba(10,16,32,0.95)",
+          maxWidth: 520,
+          textAlign: "center",
+        }}
+      >
+        <Spinner />
+        <div style={{ fontWeight: 800, fontSize: 18 }}>Memproses Import…</div>
+        <div className="muted" style={{ lineHeight: 1.4 }}>
+          Proses ini dapat memakan waktu beberapa menit tergantung ukuran file.
+          <br />
+          <b>Jangan tutup / pindah halaman</b> sampai proses selesai.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Spinner() {
+  return (
+    <div
+      aria-hidden
+      style={{
+        width: 36,
+        height: 36,
+        borderRadius: "50%",
+        border: "3px solid #1f2937",
+        borderTopColor: "#e5e7eb",
+        animation: "spin 0.9s linear infinite",
+      }}
+    >
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
   );
 }

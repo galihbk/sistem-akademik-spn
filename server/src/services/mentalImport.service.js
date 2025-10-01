@@ -30,9 +30,9 @@ function isIdHeader(h) {
 function isWeekHeaderRaw(h) {
   const s = cellToString(h);
   if (!s) return false;
-  if (/^m(?:inggu)?\s*\d+$/i.test(s)) return true; // M1 / MINGGU 1
-  if (/^w\s*\d+$/i.test(s)) return true; // W1
-  if (/^\d+$/.test(s)) return true; // 1 / 2 / 3 ...
+  if (/^m(?:inggu)?\s*\d+$/i.test(s)) return true;
+  if (/^w\s*\d+$/i.test(s)) return true;
+  if (/^\d+$/.test(s)) return true;
   return false;
 }
 
@@ -46,7 +46,6 @@ function parseWeek(h) {
   return null;
 }
 
-// pilih sheet yang paling “masuk akal”
 function pickMentalSheetByContent(wb) {
   if (!wb.SheetNames?.length) return { ws: null, name: null };
 
@@ -122,7 +121,7 @@ function normalizeHeader(h) {
   return null;
 }
 
-// fallback: deteksi blok “SKOR TIAP INDIKATOR …” -> “JUMLAH SKOR”
+// fallback: deteksi blok payung “SKOR TIAP INDIKATOR …” → “JUMLAH SKOR”
 function detectWeeksByBlockHeaders(srcHeaders) {
   const C_SKOR = "skortiapindikatoryangdiberikanpengasuh";
   const C_JUMLAH = "jumlahskor";
@@ -136,18 +135,16 @@ function detectWeeksByBlockHeaders(srcHeaders) {
   );
 
   if (start !== -1 && end !== -1 && end - start > 1) {
-    // kolom di antara start..end adalah minggu 1..N
     const weeks = [];
     let w = 1;
     for (let i = start + 1; i < end; i++) {
       weeks.push({ index: i, week: w++ });
     }
-    return weeks; // [{index, week}]
+    return weeks;
   }
   return [];
 }
 
-// siswa.id by NOSIS + angkatan (WAJIB)
 async function resolveSiswaIdByNosisAngkatan({ nosis, angkatan }) {
   nosis = (nosis || "").trim();
   angkatan = (angkatan || "").trim();
@@ -223,9 +220,9 @@ async function importMentalFromWorkbookBuffer(
     }
   }
 
-  // Fallback: blok “SKOR TIAP INDIKATOR …” → “JUMLAH SKOR”
+  // Fallback blok payung
   if (weekCols.length === 0) {
-    const blockWeeks = detectWeeksByBlockHeaders(srcHeaders); // pakai index
+    const blockWeeks = detectWeeksByBlockHeaders(srcHeaders);
     if (blockWeeks.length) {
       weekCols = blockWeeks.map(({ index, week }) => ({
         header: srcHeaders[index],
@@ -234,7 +231,8 @@ async function importMentalFromWorkbookBuffer(
     }
   }
 
-  if (!idKeys.some((k) => k.key === "nosis")) {
+  const nosisHeader = idKeys.find((k) => k.key === "nosis")?.header;
+  if (!nosisHeader) {
     const hdrRaw = srcHeaders.join(" | ");
     throw new Error(
       `Wajib ada kolom "NOSIS" pada sheet MK. Header terdeteksi: ${hdrRaw}`
@@ -249,6 +247,25 @@ async function importMentalFromWorkbookBuffer(
 
   weekCols.sort((a, b) => a.week - b.week);
 
+  // ===== NEW: filter hanya baris yang “mirip data siswa” =====
+  const looksLikeStudentRow = (row) => {
+    const nosis = cellToString(row[nosisHeader]);
+    const anyWeek = weekCols.some((wc) => {
+      const v = row[wc.header];
+      return v !== "" && v != null && cellToString(v) !== "";
+    });
+    // Baris data jika:
+    // - NOSIS angka (umum), atau
+    // - tidak ada NOSIS tapi ada nilai minggu (jarang, tapi tetap kita proses → nanti di-skip karena no_nosis)
+    if (nosis) {
+      if (!/^\d+$/.test(nosis)) return false; // buang “Mengetahui”, “KAKORSIS”, dll.
+      return true;
+    }
+    return anyWeek; // kalau tidak ada NOSIS & tidak ada nilai → ignore total (bukan data)
+  };
+
+  const filteredRows = rows.filter(looksLikeStudentRow);
+
   let ok = 0,
     skip = 0,
     fail = 0;
@@ -258,16 +275,15 @@ async function importMentalFromWorkbookBuffer(
   try {
     await client.query("BEGIN");
 
-    for (const row of rows) {
-      const nosis = cellToString(
-        row[idKeys.find((x) => x.key === "nosis")?.header]
-      );
+    for (const row of filteredRows) {
+      const nosis = cellToString(row[nosisHeader]);
       const nama =
         cellToString(row[idKeys.find((x) => x.key === "nama")?.header]) || null;
 
       if (!nosis) {
+        // sampai sini artinya baris memang berisi angka minggu, tapi tanpa NOSIS
         skip++;
-        detail.skip.push({ nosis, nama, reason: "no_nosis" });
+        detail.skip.push({ nosis: "-", nama: nama || "-", reason: "no_nosis" });
         continue;
       }
 
@@ -276,7 +292,7 @@ async function importMentalFromWorkbookBuffer(
         skip++;
         detail.skip.push({
           nosis,
-          nama,
+          nama: nama || "-",
           reason: "siswa_not_found_in_angkatan",
         });
         continue;
@@ -291,7 +307,7 @@ async function importMentalFromWorkbookBuffer(
 
       if (weekValues.length === 0) {
         skip++;
-        detail.skip.push({ nosis, nama, reason: "no_week_value" });
+        detail.skip.push({ nosis, nama: nama || "-", reason: "no_week_value" });
         continue;
       }
 
@@ -318,7 +334,7 @@ async function importMentalFromWorkbookBuffer(
       ok += weekValues.length;
       detail.ok.push({
         nosis,
-        nama,
+        nama: nama || "-",
         minggu_diimport: weekValues.map((w) => w.minggu_ke).join(","),
       });
     }
@@ -336,13 +352,13 @@ async function importMentalFromWorkbookBuffer(
 
   return {
     sheetUsed: sheetName,
-    rows: rows.length,
+    rows: filteredRows.length, // hanya hitung baris kandidat data
     ok,
     skip,
     fail,
     headerRow: best.idx + 1,
     weeksDetected: weekCols.map((w) => w.week),
-    detail, // { ok, skip, fail }
+    detail,
   };
 }
 

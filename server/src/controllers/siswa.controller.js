@@ -259,7 +259,140 @@ async function upsertByNik(req, res) {
     res.status(500).json({ message: "Gagal menyimpan data siswa" });
   }
 }
+async function rankMentalByNik(req, res) {
+  console.log("test");
+  const nikParam = (req.params.nik || "").trim();
+  const angkatanOverride = (req.query.angkatan || "").trim();
 
+  if (!nikParam) return res.status(400).json({ error: "NIK is required" });
+
+  // 1) Ambil identitas siswa & angkatan (atau pakai override)
+  const qGet = `
+    SELECT id, nama, nosis, nik, batalion, ton, kelompok_angkatan
+    FROM siswa
+    WHERE nik = $1
+    LIMIT 1;
+  `;
+  try {
+    const meQ = await pool.query(qGet, [nikParam]);
+    if (!meQ.rows.length) {
+      return res.status(404).json({ error: "Siswa tidak ditemukan" });
+    }
+    const me = meQ.rows[0];
+    const angkatan = angkatanOverride || me.kelompok_angkatan;
+    if (!angkatan) {
+      return res.status(400).json({
+        error:
+          "Kelompok angkatan siswa tidak diketahui. Isi kolom kelompok_angkatan, atau tambahkan ?angkatan=....",
+      });
+    }
+
+    // 2) Hitung rata-rata nilai mental (numeric saja) & ranking dalam angkatan tsb
+    const sql = `
+      WITH base AS (
+        SELECT
+          s.id AS siswa_id,
+          s.nik,
+          s.nosis,
+          s.nama,
+          s.batalion,
+          s.ton,
+          s.kelompok_angkatan,
+          UPPER(NULLIF(regexp_replace(s.ton, '[^A-Za-z].*', ''), '')) AS kompi,  -- huruf awal (A1 -> A)
+          CASE
+            WHEN regexp_replace(s.ton, '\\D+', '', 'g') <> ''
+              THEN (regexp_replace(s.ton, '\\D+', '', 'g'))::int
+            ELSE NULL
+          END AS pleton
+        FROM siswa s
+        WHERE s.kelompok_angkatan = $2
+      ),
+      mental_num AS (
+        SELECT
+          m.siswa_id,
+          CASE
+            WHEN regexp_replace(COALESCE(m.nilai, ''), ',', '.', 'g') ~ '^[0-9]+(\\.[0-9]+)?$'
+              THEN regexp_replace(m.nilai, ',', '.', 'g')::numeric
+            ELSE NULL::numeric
+          END AS nilai_num
+        FROM mental m
+        JOIN base b ON b.siswa_id = m.siswa_id
+      ),
+      avg_mental AS (
+        SELECT
+          b.*,
+          AVG(n.nilai_num) AS avg_nilai
+        FROM base b
+        LEFT JOIN mental_num n ON n.siswa_id = b.siswa_id
+        GROUP BY b.siswa_id, b.nik, b.nosis, b.nama, b.batalion, b.ton, b.kelompok_angkatan, b.kompi, b.pleton
+      ),
+      ranked AS (
+        SELECT
+          *,
+          COUNT(avg_nilai) FILTER (WHERE avg_nilai IS NOT NULL) OVER ()                           AS total_global,
+          COUNT(avg_nilai) FILTER (WHERE avg_nilai IS NOT NULL) OVER (PARTITION BY batalion)      AS total_batalion,
+          COUNT(avg_nilai) FILTER (WHERE avg_nilai IS NOT NULL) OVER (PARTITION BY kompi)         AS total_kompi,
+          COUNT(avg_nilai) FILTER (WHERE avg_nilai IS NOT NULL) OVER (PARTITION BY kompi, pleton) AS total_pleton,
+
+          CASE WHEN avg_nilai IS NOT NULL
+               THEN RANK() OVER (ORDER BY avg_nilai DESC NULLS LAST)
+               END AS rank_global,
+
+          CASE WHEN avg_nilai IS NOT NULL
+               THEN RANK() OVER (PARTITION BY batalion ORDER BY avg_nilai DESC NULLS LAST)
+               END AS rank_batalion,
+
+          CASE WHEN avg_nilai IS NOT NULL
+               THEN RANK() OVER (PARTITION BY kompi ORDER BY avg_nilai DESC NULLS LAST)
+               END AS rank_kompi,
+
+          CASE WHEN avg_nilai IS NOT NULL
+               THEN RANK() OVER (PARTITION BY kompi, pleton ORDER BY avg_nilai DESC NULLS LAST)
+               END AS rank_pleton
+        FROM avg_mental
+      )
+      SELECT
+        nik, nosis, nama, batalion, ton, kelompok_angkatan,
+        kompi, pleton, avg_nilai,
+        rank_global,   total_global,
+        rank_batalion, total_batalion,
+        rank_kompi,    total_kompi,
+        rank_pleton,   total_pleton
+      FROM ranked
+      WHERE nik = $1
+      LIMIT 1;
+    `;
+
+    const { rows } = await pool.query(sql, [nikParam, angkatan]);
+    if (!rows.length) {
+      return res
+        .status(404)
+        .json({ error: "Siswa tidak ditemukan di angkatan tersebut" });
+    }
+
+    const r = rows[0];
+    return res.json({
+      nik: r.nik,
+      nosis: r.nosis,
+      nama: r.nama,
+      batalion: r.batalion,
+      ton: r.ton,
+      angkatan,
+      kompi: r.kompi,
+      pleton: r.pleton,
+      avg: r.avg_nilai, // numeric atau null
+      rank: {
+        global: { pos: r.rank_global, total: r.total_global },
+        batalion: { pos: r.rank_batalion, total: r.total_batalion },
+        kompi: { pos: r.rank_kompi, total: r.total_kompi },
+        pleton: { pos: r.rank_pleton, total: r.total_pleton },
+      },
+    });
+  } catch (e) {
+    console.error("[rankMentalByNik] error:", e);
+    return res.status(500).json({ error: "Internal error" });
+  }
+}
 module.exports = {
   list,
   detailByNik,
@@ -273,4 +406,5 @@ module.exports = {
   listJasmani,
   listRiwayatKesehatan,
   upsertByNik,
+  rankMentalByNik,
 };

@@ -19,7 +19,7 @@ router.get("/nik/:nik/mapel", ctrl.listMapel);
 router.get("/nik/:nik/prestasi", ctrl.listPrestasi);
 router.get("/nik/:nik/jasmani", ctrl.listJasmani);
 router.get("/nik/:nik/riwayat_kesehatan", ctrl.listRiwayatKesehatan);
-
+router.get("/nik/:nik/mental/rank", ctrl.rankMentalByNik);
 // Upsert by NIK
 router.post("/upsert", ctrl.upsertByNik);
 
