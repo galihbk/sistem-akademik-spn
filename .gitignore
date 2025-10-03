@@ -30,11 +30,6 @@ electron-builder.yml
 .env.test.local
 .env.production.local
 
-# Database files / dumps
-*.sqlite
-*.db
-*.sql
-*.dump
 
 # OS generated files
 .DS_Store
