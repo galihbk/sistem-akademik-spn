@@ -180,7 +180,9 @@ CREATE TABLE IF NOT EXISTS mental (
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_mental_siswa ON mental (siswa_id);
+CREATE INDEX IF NOT EXISTS idx_mental_siswa_minggu ON mental (siswa_id, minggu_ke);
+CREATE INDEX IF NOT EXISTS idx_siswa_kelompok_angkatan ON siswa (kelompok_angkatan);
+CREATE INDEX IF NOT EXISTS idx_siswa_nama_nosis_lower ON siswa ((lower(nama)), (lower(nosis)));
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_mental_updated') THEN
@@ -216,7 +218,7 @@ BEGIN
 END$$;
 
 -- =========================================
--- JASMANI (unique per siswa_id, item)
+-- JASMANI (model lama per-item; dipertahankan)
 -- =========================================
 CREATE TABLE IF NOT EXISTS jasmani (
   id BIGSERIAL PRIMARY KEY,
@@ -275,7 +277,7 @@ CREATE TABLE IF NOT EXISTS prestasi (
   judul TEXT,
   tingkat TEXT,
   deskripsi TEXT,
-  file_path TEXT;
+  file_path TEXT,
   tanggal DATE,
   created_at TIMESTAMP DEFAULT NOW()
 );
@@ -289,26 +291,11 @@ CREATE TABLE IF NOT EXISTS riwayat_kesehatan (
   siswa_id INT NOT NULL REFERENCES siswa(id) ON DELETE CASCADE,
   judul TEXT NOT NULL,
   deskripsi TEXT,
-  file_path TEXT;
+  file_path TEXT,
   tanggal DATE,
   created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_riwayatkes_siswa ON riwayat_kesehatan (siswa_id);
-
--- =========================================
--- TES DARI SEMARANG/JOGJA (normalized)
--- =========================================
-CREATE TABLE IF NOT EXISTS tes_semarang (
-  id SERIAL PRIMARY KEY,
-  siswa_id INT NOT NULL REFERENCES siswa(id) ON DELETE CASCADE,
-  jenis_tes VARCHAR(32) NOT NULL,   -- psikologi|jasmani|kesehatan
-  parameter VARCHAR(64),
-  skor NUMERIC(6,2),
-  tanggal DATE,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_tes_semarang_siswa ON tes_semarang (siswa_id);
-CREATE INDEX IF NOT EXISTS idx_tes_semarang_jenis ON tes_semarang (jenis_tes);
 
 -- =========================================
 -- Sinkronisasi Kolom (defensive) - tambah jika belum ada
@@ -423,7 +410,7 @@ BEGIN
   END IF;
 END$$;
 
--- jasmani
+-- jasmani (model lama)
 ALTER TABLE jasmani
   ADD COLUMN IF NOT EXISTS siswa_id INT,
   ADD COLUMN IF NOT EXISTS item TEXT,
@@ -576,34 +563,146 @@ BEGIN
   END IF;
 END$$;
 
--- tes_semarang
-ALTER TABLE tes_semarang
-  ADD COLUMN IF NOT EXISTS siswa_id INT,
-  ADD COLUMN IF NOT EXISTS jenis_tes VARCHAR(32),
-  ADD COLUMN IF NOT EXISTS parameter VARCHAR(64),
-  ADD COLUMN IF NOT EXISTS skor NUMERIC(6,2),
-  ADD COLUMN IF NOT EXISTS tanggal DATE,
-  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
 
+-- ======================================================================
+-- >>> BAGIAN BARU: TABEL LEBAR UNTUK IMPOR EXCEL JASMANI SPN
+-- ======================================================================
+
+CREATE TABLE IF NOT EXISTS jasmani_spn (
+  id BIGSERIAL PRIMARY KEY,
+  siswa_id INT REFERENCES siswa(id) ON DELETE SET NULL,
+
+  -- identitas ringan dari Excel (opsional)
+  nosis VARCHAR(50),
+  nama  TEXT,
+  pleton TEXT,
+  kelas  TEXT,
+
+  -- nilai jasmani (tambahkan kolom lain jika ada di Excel)
+  lari_12m      NUMERIC(10,2),
+  push_up       NUMERIC(10,2),
+  sit_up        NUMERIC(10,2),
+  shuttle_run   NUMERIC(10,2),
+  pull_up       NUMERIC(10,2),
+
+  nilai_akhir   NUMERIC(10,2),
+  keterangan    TEXT,
+
+  -- metadata impor
+  tahap INT,                -- tahap/remidi ke-
+  sumber_file TEXT,         -- nama file excel
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Index bantu
+CREATE INDEX IF NOT EXISTS idx_jasmanispn_siswa ON jasmani_spn(siswa_id);
+CREATE INDEX IF NOT EXISTS idx_jasmanispn_tahap ON jasmani_spn(tahap);
+CREATE INDEX IF NOT EXISTS idx_jasmanispn_nosis ON jasmani_spn(nosis);
+
+-- Trigger updated_at
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_jasmanispn_updated') THEN
+    CREATE TRIGGER trg_jasmanispn_updated
+    BEFORE UPDATE ON jasmani_spn
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+END$$;
+
+-- Guard kolom
+ALTER TABLE jasmani_spn
+  ADD COLUMN IF NOT EXISTS siswa_id INT,
+  ADD COLUMN IF NOT EXISTS nosis VARCHAR(50),
+  ADD COLUMN IF NOT EXISTS nama TEXT,
+  ADD COLUMN IF NOT EXISTS pleton TEXT,
+  ADD COLUMN IF NOT EXISTS kelas TEXT,
+  ADD COLUMN IF NOT EXISTS lari_12m NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS push_up NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS sit_up NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS shuttle_run NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS pull_up NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS nilai_akhir NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS keterangan TEXT,
+  ADD COLUMN IF NOT EXISTS tahap INT,
+  ADD COLUMN IF NOT EXISTS sumber_file TEXT,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
+-- FK guard
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns
-             WHERE table_name='tes_semarang' AND column_name='siswa_id')
+             WHERE table_name='jasmani_spn' AND column_name='siswa_id')
   THEN
     IF NOT EXISTS (
       SELECT 1 FROM information_schema.table_constraints tc
       JOIN information_schema.key_column_usage kcu
         ON tc.constraint_name = kcu.constraint_name
-      WHERE tc.table_name='tes_semarang'
+      WHERE tc.table_name='jasmani_spn'
         AND tc.constraint_type='FOREIGN KEY'
         AND kcu.column_name='siswa_id'
     ) THEN
-      ALTER TABLE tes_semarang
-      ADD CONSTRAINT fk_tes_semarang_siswa
-      FOREIGN KEY (siswa_id) REFERENCES siswa(id) ON DELETE CASCADE;
+      ALTER TABLE jasmani_spn
+      ADD CONSTRAINT fk_jasmanispn_siswa
+      FOREIGN KEY (siswa_id) REFERENCES siswa(id) ON DELETE SET NULL;
     END IF;
   END IF;
 END$$;
+
+-- ======================================================================
+-- VIEW bantu: bentuk “per item” dari jasmani_spn (untuk laporan fleksibel)
+-- ======================================================================
+CREATE OR REPLACE VIEW v_jasmani_itemized AS
+SELECT
+  j.id AS jasmani_spn_id,
+  j.siswa_id,
+  COALESCE(s.nosis, j.nosis) AS nosis,
+  COALESCE(s.nama, j.nama)   AS nama,
+  j.pleton,
+  j.kelas,
+  j.tahap,
+  'Lari 12 Menit'::text AS item,
+  j.lari_12m::text      AS nilai,
+  NULL::text            AS kategori,
+  j.keterangan,
+  j.sumber_file,
+  j.created_at,
+  j.updated_at
+FROM jasmani_spn j
+LEFT JOIN siswa s ON s.id = j.siswa_id
+UNION ALL
+SELECT j.id, j.siswa_id, COALESCE(s.nosis, j.nosis), COALESCE(s.nama, j.nama),
+       j.pleton, j.kelas, j.tahap,
+       'Push Up', j.push_up::text, NULL::text,
+       j.keterangan, j.sumber_file, j.created_at, j.updated_at
+FROM jasmani_spn j
+LEFT JOIN siswa s ON s.id = j.siswa_id
+UNION ALL
+SELECT j.id, j.siswa_id, COALESCE(s.nosis, j.nosis), COALESCE(s.nama, j.nama),
+       j.pleton, j.kelas, j.tahap,
+       'Sit Up', j.sit_up::text, NULL::text,
+       j.keterangan, j.sumber_file, j.created_at, j.updated_at
+FROM jasmani_spn j
+LEFT JOIN siswa s ON s.id = j.siswa_id
+UNION ALL
+SELECT j.id, j.siswa_id, COALESCE(s.nosis, j.nosis), COALESCE(s.nama, j.nama),
+       j.pleton, j.kelas, j.tahap,
+       'Shuttle Run', j.shuttle_run::text, NULL::text,
+       j.keterangan, j.sumber_file, j.created_at, j.updated_at
+FROM jasmani_spn j
+LEFT JOIN siswa s ON s.id = j.siswa_id
+UNION ALL
+SELECT j.id, j.siswa_id, COALESCE(s.nosis, j.nosis), COALESCE(s.nama, j.nama),
+       j.pleton, j.kelas, j.tahap,
+       'Pull Up', j.pull_up::text, NULL::text,
+       j.keterangan, j.sumber_file, j.created_at, j.updated_at
+FROM jasmani_spn j
+LEFT JOIN siswa s ON s.id = j.siswa_id;
+
+-- (Opsional) materialized view jika butuh performa:
+-- CREATE MATERIALIZED VIEW mv_jasmani_itemized AS SELECT * FROM v_jasmani_itemized;
+-- REFRESH MATERIALIZED VIEW mv_jasmani_itemized;
 
 -- =========================================
 -- Selesai

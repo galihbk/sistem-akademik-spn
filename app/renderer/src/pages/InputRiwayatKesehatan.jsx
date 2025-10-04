@@ -1,80 +1,215 @@
+// src/pages/InputRiwayatKesehatan.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
+/* ---------- Utils ---------- */
+function buildDownloadUrl(filePath) {
+  if (!filePath) return "#";
+  const clean = String(filePath)
+    .replace(/^\/+/, "")
+    .replace(/^uploads\//i, "");
+  return `${API}/download?path=${encodeURIComponent(clean)}`;
+}
+async function tryHead(url) {
+  try {
+    const r = await fetch(url, { method: "HEAD" });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+function fmtDate(v) {
+  if (!v) return "-";
+  try {
+    const d = new Date(v);
+    if (Number.isNaN(+d)) return String(v);
+    return d.toLocaleDateString("id-ID");
+  } catch {
+    return String(v);
+  }
+}
+const norm = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "");
+
+/* ---------- Reusable Modal ---------- */
+function Modal({ open, onClose, title, children }) {
+  if (!open) return null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onMouseDown={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(3,6,17,0.66)",
+        backdropFilter: "blur(2px)",
+        display: "grid",
+        placeItems: "center",
+        zIndex: 1000,
+        padding: 16,
+      }}
+    >
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          width: "min(960px, 96vw)",
+          maxHeight: "86vh",
+          overflow: "auto",
+          background: "#0b1220",
+          border: "1px solid #1f2937",
+          borderRadius: 14,
+          padding: 14,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            marginBottom: 8,
+          }}
+        >
+          <div style={{ fontWeight: 800, fontSize: 18 }}>{title}</div>
+          <button className="btn" onClick={onClose}>
+            Tutup
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Halaman ---------- */
 export default function InputRiwayatKesehatan() {
+  /* ====== HISTORY LIST ====== */
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [qHist, setQHist] = useState("");
+  const [page, setPage] = useState(1);
+  const [limit] = useState(20);
+  const [loadingList, setLoadingList] = useState(false);
+  const [alert, setAlert] = useState({ type: "", text: "" }); // success | danger
+
+  const listUrl = useMemo(() => {
+    const u = new URL(`${API}/riwayat_kesehatan`);
+    if (qHist.trim()) u.searchParams.set("q", qHist.trim());
+    u.searchParams.set("page", String(page));
+    u.searchParams.set("limit", String(limit));
+    u.searchParams.set("sort_dir", "desc");
+    return u.toString();
+  }, [qHist, page, limit]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        setLoadingList(true);
+        const token = await window.authAPI?.getToken?.();
+        const r = await fetch(listUrl, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!alive) return;
+        setItems(Array.isArray(data.items) ? data.items : []);
+        setTotal(data.total ?? 0);
+      } catch {
+        if (!alive) return;
+        setItems([]);
+        setTotal(0);
+      } finally {
+        if (!alive) return;
+        setLoadingList(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [listUrl]);
+
+  /* ====== MODAL FORM ====== */
+  const [open, setOpen] = useState(false);
+
   // form state
   const [siswaId, setSiswaId] = useState(null);
-  const [q, setQ] = useState("");
+  const [query, setQuery] = useState("");
   const [judul, setJudul] = useState("");
   const [deskripsi, setDeskripsi] = useState("");
   const [tanggal, setTanggal] = useState(() =>
     new Date().toISOString().slice(0, 10)
   );
   const [file, setFile] = useState(null);
+  const [saving, setSaving] = useState(false);
 
-  const [msg, setMsg] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  // autocomplete state
-  const [openList, setOpenList] = useState(false);
-  const [items, setItems] = useState([]);
+  // dropdown siswa
   const [searching, setSearching] = useState(false);
+  const [sug, setSug] = useState([]);
+  const [openList, setOpenList] = useState(false);
+  const inputRef = useRef(null);
   const listRef = useRef(null);
-  const debounceRef = useRef(null);
+  const q = useMemo(() => query.trim(), [query]);
+  const filteredSug = useMemo(() => {
+    const n = norm(q);
+    return n.length < 2
+      ? []
+      : sug
+          .filter((s) => norm(s.nosis).includes(n) || norm(s.nama).includes(n))
+          .slice(0, 20);
+  }, [sug, q]);
 
-  // --- cari siswa (debounced) ---
+  // fetch siswa (debounced)
   useEffect(() => {
-    const val = String(q || "").trim();
-
-    // jika sudah memilih, jangan cari lagi
-    if (siswaId) return;
-
-    // clear debounce
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    if (val.length < 2) {
-      setItems([]);
-      setOpenList(false);
+    let stop = false;
+    if (q.length < 2 || siswaId) {
+      setSug([]);
       return;
     }
-
-    debounceRef.current = setTimeout(async () => {
-      let alive = true;
-      setSearching(true);
+    const t = setTimeout(async () => {
       try {
+        setSearching(true);
         const token = await window.authAPI?.getToken?.();
-        const url = new URL(`${API}/siswa`);
-        url.searchParams.set("q", val);
-        url.searchParams.set("page", "1");
-        url.searchParams.set("limit", "20");
-        const res = await fetch(url, {
+        const u = new URL(`${API}/siswa`);
+        u.searchParams.set("q", q);
+        u.searchParams.set("page", "1");
+        u.searchParams.set("limit", "50");
+        const r = await fetch(u.toString(), {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data?.message || "Gagal cari siswa");
-        if (alive) {
-          setItems(Array.isArray(data.items) ? data.items : []);
-          setOpenList(true);
-        }
-      } catch {
-        setItems([]);
+        const data = await r.json().catch(() => ({}));
+        if (stop) return;
+        setSug(
+          (Array.isArray(data.items) ? data.items : []).map((s) => ({
+            id: s.id,
+            nosis: s.nosis,
+            nama: s.nama,
+            nik: s.nik,
+          }))
+        );
         setOpenList(true);
+      } catch {
+        if (!stop) setSug([]);
       } finally {
-        setSearching(false);
+        if (!stop) setSearching(false);
       }
-      return () => {
-        alive = false;
-      };
-    }, 250); // debounce 250ms
+    }, 250);
+    return () => {
+      stop = true;
+      clearTimeout(t);
+    };
   }, [q, siswaId]);
 
-  // --- tutup list saat klik di luar ---
   useEffect(() => {
     function onDocClick(e) {
-      if (!listRef.current) return;
-      if (!listRef.current.parentElement?.contains(e.target))
-        setOpenList(false);
+      const inInput = inputRef.current?.contains?.(e.target);
+      const inList = listRef.current?.contains?.(e.target);
+      if (!inInput && !inList) setOpenList(false);
     }
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
@@ -82,61 +217,71 @@ export default function InputRiwayatKesehatan() {
 
   function pickSiswa(s) {
     setSiswaId(s.id);
-    setQ(`${(s.nosis || "").toString().padStart(4, "0")} — ${s.nama}`);
+    setQuery(`${String(s.nosis || "").padStart(4, "0")} — ${s.nama}`);
     setOpenList(false);
   }
-
-  function resetPick() {
+  function resetForm() {
     setSiswaId(null);
-    setQ("");
-    setItems([]);
-    setOpenList(false);
+    setQuery("");
+    setJudul("");
+    setDeskripsi("");
+    setTanggal(new Date().toISOString().slice(0, 10));
+    setFile(null);
+    const el = document.getElementById("rkFileInput");
+    if (el) el.value = "";
   }
 
   async function submit() {
-    setMsg("");
+    setAlert({ type: "", text: "" });
     if (!siswaId || !judul.trim() || !deskripsi.trim()) {
-      setMsg("Lengkapi siswa, Judul, dan Deskripsi.");
+      setAlert({
+        type: "danger",
+        text: "Lengkapi siswa, Judul, dan Deskripsi.",
+      });
       return;
     }
     try {
-      setLoading(true);
-      const token = await window.authAPI.getToken();
+      setSaving(true);
+      const token = await window.authAPI?.getToken?.();
 
       const form = new FormData();
       form.append("siswa_id", String(siswaId));
       form.append("judul", judul.trim());
       form.append("deskripsi", deskripsi.trim());
       form.append("tanggal", tanggal || "");
-      if (file) form.append("file", file); // lampiran opsional
+      if (file) form.append("file", file);
 
       const res = await fetch(`${API}/riwayat_kesehatan`, {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Gagal simpan");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Gagal menyimpan data.");
 
-      setMsg("Berhasil disimpan.");
+      setAlert({
+        type: "success",
+        text: "Berhasil disimpan.",
+      });
+      // refresh list
+      setPage(1);
+      // pertahankan pilihan siswa agar bisa input beruntun
       setJudul("");
       setDeskripsi("");
       setFile(null);
       const el = document.getElementById("rkFileInput");
       if (el) el.value = "";
     } catch (e) {
-      setMsg(`Gagal: ${e.message}`);
+      setAlert({ type: "danger", text: `Gagal: ${e.message}` });
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
-  function back() {
-    window.location.hash = "#/import";
-  }
-
+  /* ---------- UI ---------- */
   return (
     <div className="grid">
+      {/* Header + open modal */}
       <div
         className="card"
         style={{
@@ -146,46 +291,186 @@ export default function InputRiwayatKesehatan() {
         }}
       >
         <div>
-          <div style={{ fontWeight: 800, fontSize: 18 }}>
-            Input Riwayat Kesehatan
-          </div>
+          <div style={{ fontWeight: 800, fontSize: 18 }}>Riwayat Kesehatan</div>
           <div className="muted">Catat riwayat kesehatan per siswa</div>
         </div>
-        <button className="btn" onClick={back}>
-          Kembali
+        <button className="btn" onClick={() => setOpen(true)}>
+          + Input Riwayat
         </button>
       </div>
 
-      <div className="card">
-        <div className="grid grid-2">
-          <div style={{ position: "relative" }}>
-            <label className="muted">Cari NOSIS / Nama</label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input
-                className="input"
-                placeholder="mis. 0123 / Achmad…"
-                value={q}
-                onChange={(e) => {
-                  setQ(e.target.value);
-                  setSiswaId(null);
-                }}
-                onFocus={() => {
-                  if (items.length) setOpenList(true);
-                }}
-              />
-              {siswaId && (
-                <button
-                  className="btn"
-                  type="button"
-                  onClick={resetPick}
-                  title="Ganti siswa"
-                >
-                  Ganti
-                </button>
-              )}
-            </div>
+      {/* Alerts di atas tabel */}
+      {alert.text && (
+        <div
+          className="card"
+          style={{
+            border: `1px solid ${
+              alert.type === "success" ? "#166534" : "#7f1d1d"
+            }`,
+            background: alert.type === "success" ? "#052e1a" : "#1b0c0c",
+            color: alert.type === "success" ? "#86efac" : "#fca5a5",
+            padding: "8px 12px",
+            borderRadius: 12,
+          }}
+        >
+          {alert.text}
+        </div>
+      )}
 
-            {/* Dropdown hasil pencarian (tema lebih terang) */}
+      {/* Toolbar list */}
+      <div
+        className="card"
+        style={{ display: "flex", gap: 8, alignItems: "center" }}
+      >
+        <input
+          className="input"
+          placeholder="Cari judul / nama / nosis …"
+          value={qHist}
+          onChange={(e) => {
+            setQHist(e.target.value);
+            setPage(1);
+          }}
+          style={{ minWidth: 280 }}
+        />
+        <div style={{ marginLeft: "auto", color: "#94a3b8" }}>
+          Total: {total}
+        </div>
+      </div>
+
+      {/* Tabel history */}
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div
+          className="table-wrap"
+          style={{ maxHeight: "60vh", overflow: "auto" }}
+        >
+          <table className="table" style={{ width: "100%" }}>
+            <thead
+              style={{
+                position: "sticky",
+                top: 0,
+                background: "#0b1220",
+                zIndex: 1,
+              }}
+            >
+              <tr>
+                <th style={{ textAlign: "left" }}>NOSIS</th>
+                <th style={{ textAlign: "left" }}>Nama</th>
+                <th style={{ textAlign: "left" }}>Judul</th>
+                <th style={{ textAlign: "left" }}>Tanggal</th>
+                <th style={{ textAlign: "left" }}>File</th>
+                <th style={{ textAlign: "left" }}>Dibuat</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loadingList ? (
+                <tr>
+                  <td colSpan={6} className="muted" style={{ padding: 12 }}>
+                    Memuat…
+                  </td>
+                </tr>
+              ) : items.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="muted" style={{ padding: 12 }}>
+                    Tidak ada data.
+                  </td>
+                </tr>
+              ) : (
+                items.map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ whiteSpace: "nowrap" }}>{r.nosis ?? "-"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{r.nama ?? "-"}</td>
+                    <td>{r.judul ?? "-"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {fmtDate(r.tanggal)}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {r.file_path ? (
+                        <button
+                          className="btn"
+                          style={{ padding: "6px 10px" }}
+                          onClick={async () => {
+                            const url = buildDownloadUrl(r.file_path);
+                            if (!(await tryHead(url))) {
+                              setAlert({
+                                type: "danger",
+                                text: "File tidak ditemukan.",
+                              });
+                              return;
+                            }
+                            if (window.electronAPI?.download) {
+                              window.electronAPI.download(url);
+                            } else {
+                              const a = document.createElement("a");
+                              a.href = url;
+                              a.download = "";
+                              document.body.appendChild(a);
+                              a.click();
+                              a.remove();
+                            }
+                          }}
+                        >
+                          Download
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {fmtDate(r.created_at)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Pagination */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button
+          className="btn"
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page <= 1}
+        >
+          Prev
+        </button>
+        <span className="badge">Page {page}</span>
+        <button
+          className="btn"
+          onClick={() => setPage((p) => p + 1)}
+          disabled={items.length < limit}
+        >
+          Next
+        </button>
+      </div>
+
+      {/* Modal Form */}
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Input Riwayat Kesehatan"
+      >
+        {/* Cari siswa + tanggal */}
+        <div className="grid grid-2" style={{ gap: 12, position: "relative" }}>
+          <div ref={inputRef} style={{ position: "relative" }}>
+            <label className="muted">Cari NOSIS / Nama</label>
+            <input
+              className="input"
+              placeholder="Ketik min. 2 huruf lalu pilih dari daftar"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSiswaId(null);
+              }}
+              onFocus={() => q.length >= 2 && setOpenList(true)}
+              autoComplete="off"
+            />
+            {siswaId && (
+              <div className="muted" style={{ marginTop: 6 }}>
+                Siswa terpilih. Klik “Ganti” untuk memilih ulang.
+              </div>
+            )}
             {openList && (
               <div
                 ref={listRef}
@@ -195,11 +480,11 @@ export default function InputRiwayatKesehatan() {
                   left: 0,
                   right: 0,
                   marginTop: 6,
-                  background: "#1e293b", // slate-800
-                  border: "1px solid #475569", // slate-600
+                  background: "#1e293b",
+                  border: "1px solid #475569",
                   borderRadius: 10,
                   boxShadow: "0 10px 20px rgba(0,0,0,.35)",
-                  maxHeight: 300,
+                  maxHeight: 280,
                   overflow: "auto",
                   color: "#e2e8f0",
                 }}
@@ -215,33 +500,32 @@ export default function InputRiwayatKesehatan() {
                 >
                   {searching ? "Mencari..." : "Pilih dari daftar:"}
                 </div>
-
-                {!searching && items.length === 0 ? (
+                {filteredSug.length === 0 ? (
                   <div
                     className="muted"
-                    style={{ padding: "10px", color: "#cbd5e1" }}
+                    style={{ padding: 10, color: "#cbd5e1" }}
                   >
-                    {q.trim().length < 2
+                    {q.length < 2
                       ? "Ketik minimal 2 karakter."
                       : "Tidak ada hasil."}
                   </div>
                 ) : (
-                  items.map((s) => (
+                  filteredSug.map((s) => (
                     <button
                       key={s.id}
                       type="button"
                       onClick={() => pickSiswa(s)}
-                      onMouseDown={(e) => e.preventDefault()}
                       style={{
                         width: "100%",
                         textAlign: "left",
                         padding: "10px 12px",
-                        border: 0,
                         background: "#1f2a3a",
+                        border: 0,
                         borderBottom: "1px solid #334155",
                         cursor: "pointer",
                         color: "#e5e7eb",
                       }}
+                      onMouseDown={(e) => e.preventDefault()}
                       onMouseEnter={(e) =>
                         (e.currentTarget.style.background = "#2b3a55")
                       }
@@ -250,7 +534,7 @@ export default function InputRiwayatKesehatan() {
                       }
                     >
                       <div style={{ fontWeight: 700 }}>
-                        {(s.nosis || "").toString().padStart(4, "0")} — {s.nama}
+                        {String(s.nosis || "-").padStart(4, "0")} — {s.nama}
                       </div>
                       <div
                         className="muted"
@@ -262,6 +546,15 @@ export default function InputRiwayatKesehatan() {
                   ))
                 )}
               </div>
+            )}
+            {siswaId && (
+              <button
+                className="btn"
+                style={{ marginTop: 8, padding: "4px 8px" }}
+                onClick={resetForm}
+              >
+                Ganti
+              </button>
             )}
           </div>
 
@@ -276,6 +569,7 @@ export default function InputRiwayatKesehatan() {
           </div>
         </div>
 
+        {/* Judul */}
         <div style={{ marginTop: 10 }}>
           <label className="muted">Judul</label>
           <input
@@ -286,16 +580,19 @@ export default function InputRiwayatKesehatan() {
           />
         </div>
 
+        {/* Deskripsi */}
         <div style={{ marginTop: 10 }}>
           <label className="muted">Deskripsi</label>
           <textarea
             className="input"
             rows={3}
+            placeholder="Tuliskan detail singkat"
             value={deskripsi}
             onChange={(e) => setDeskripsi(e.target.value)}
           />
         </div>
 
+        {/* File */}
         <div style={{ marginTop: 10 }}>
           <label className="muted">Lampiran (opsional)</label>
           <input
@@ -304,29 +601,22 @@ export default function InputRiwayatKesehatan() {
             onChange={(e) => setFile(e.target.files?.[0] || null)}
           />
           {file && (
-            <div className="muted" style={{ marginTop: 4 }}>
-              Dipilih: <b>{file.name}</b>
+            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+              {file.name} — {(file.size / 1024).toFixed(1)} KB
             </div>
           )}
         </div>
 
-        {msg && (
-          <div
-            style={{
-              marginTop: 10,
-              color: msg.startsWith("Berhasil") ? "#86efac" : "#fca5a5",
-            }}
-          >
-            {msg}
-          </div>
-        )}
-
-        <div style={{ marginTop: 12 }}>
-          <button className="btn" disabled={loading} onClick={submit}>
-            Simpan
+        {/* Actions */}
+        <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+          <button className="btn" disabled={saving} onClick={submit}>
+            {saving ? "Menyimpan..." : "Simpan"}
+          </button>
+          <button className="btn" onClick={resetForm} disabled={saving}>
+            Reset
           </button>
         </div>
-      </div>
+      </Modal>
     </div>
   );
 }

@@ -1,9 +1,105 @@
+// src/pages/InputPrestasi.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
+/* ======================= Util kecil ======================= */
+function buildDownloadUrl(filePath) {
+  if (!filePath) return "#";
+  const clean = String(filePath)
+    .replace(/^\/+/, "")
+    .replace(/^uploads\//i, "");
+  return `${API}/download?path=${encodeURIComponent(clean)}`;
+}
+async function tryHead(url) {
+  try {
+    const r = await fetch(url, { method: "HEAD" });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+function fmtDate(v) {
+  if (!v) return "-";
+  try {
+    const d = new Date(v);
+    if (Number.isNaN(+d)) return String(v);
+    return d.toLocaleDateString("id-ID");
+  } catch {
+    return String(v);
+  }
+}
+const norm = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "");
+
+/* ======================= Modal ======================= */
+function Modal({ open, onClose, title, children }) {
+  if (!open) return null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(3,6,17,0.66)",
+        backdropFilter: "blur(2px)",
+        display: "grid",
+        placeItems: "center",
+        zIndex: 1000,
+        padding: 16,
+      }}
+      onMouseDown={onClose}
+    >
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          width: "min(960px, 96vw)",
+          maxHeight: "86vh",
+          overflow: "auto",
+          background: "#0b1220",
+          border: "1px solid #1f2937",
+          borderRadius: 14,
+          padding: 14,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            marginBottom: 8,
+          }}
+        >
+          <div style={{ fontWeight: 800, fontSize: 18 }}>{title}</div>
+          <button className="btn" onClick={onClose}>
+            Tutup
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ======================= Komponen utama ======================= */
 export default function InputPrestasi() {
-  // form state
+  /* ---------- state: history ---------- */
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [qHist, setQHist] = useState("");
+  const [page, setPage] = useState(1);
+  const [limit] = useState(20);
+  const [loadingList, setLoadingList] = useState(false);
+  const [alert, setAlert] = useState({ type: "", text: "" }); // {type:'success'|'danger', text:''}
+
+  /* ---------- state: modal form ---------- */
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedSiswa, setSelectedSiswa] = useState(null); // {id, nosis, nama, nik}
   const [judul, setJudul] = useState("");
@@ -13,52 +109,92 @@ export default function InputPrestasi() {
     new Date().toISOString().slice(0, 10)
   );
   const [file, setFile] = useState(null);
+  const [saving, setSaving] = useState(false);
 
-  // ui state
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
-  const [openList, setOpenList] = useState(false);
+  // dropdown siswa
   const [searching, setSearching] = useState(false);
-  const [items, setItems] = useState([]); // hasil pencarian siswa
-
+  const [sug, setSug] = useState([]);
+  const [openList, setOpenList] = useState(false);
   const inputRef = useRef(null);
   const listRef = useRef(null);
   const q = useMemo(() => query.trim(), [query]);
+  const filteredSug = useMemo(() => {
+    const n = norm(q);
+    return n.length < 2
+      ? []
+      : sug
+          .filter((s) => norm(s.nosis).includes(n) || norm(s.nama).includes(n))
+          .slice(0, 20);
+  }, [sug, q]);
 
-  // debounce pencarian
+  /* ---------- fetch history ---------- */
+  const listUrl = useMemo(() => {
+    const u = new URL(`${API}/prestasi`);
+    if (qHist.trim()) u.searchParams.set("q", qHist.trim());
+    u.searchParams.set("page", String(page));
+    u.searchParams.set("limit", String(limit));
+    u.searchParams.set("sort_dir", "desc");
+    return u.toString();
+  }, [qHist, page, limit]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        setLoadingList(true);
+        const token = await window.authAPI?.getToken?.();
+        const r = await fetch(listUrl, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!alive) return;
+        setItems(Array.isArray(data.items) ? data.items : []);
+        setTotal(data.total ?? 0);
+      } catch {
+        if (!alive) return;
+        setItems([]);
+        setTotal(0);
+      } finally {
+        if (!alive) return;
+        setLoadingList(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [listUrl]);
+
+  /* ---------- search siswa (modal) ---------- */
   useEffect(() => {
     let stop = false;
-    const min = q.length >= 2;
-    if (!min) {
-      setItems([]);
+    if (q.length < 2) {
+      setSug([]);
       return;
     }
     (async () => {
       try {
         setSearching(true);
         const token = await window.authAPI?.getToken?.();
-        const url = new URL(`${API}/siswa`);
-        url.searchParams.set("q", q);
-        url.searchParams.set("limit", "20");
-        url.searchParams.set("page", "1");
-        const res = await fetch(url.toString(), {
+        const u = new URL(`${API}/siswa`);
+        u.searchParams.set("q", q);
+        u.searchParams.set("page", "1");
+        u.searchParams.set("limit", "50");
+        const r = await fetch(u.toString(), {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        const data = await res.json().catch(() => ({}));
-        if (!stop) {
-          const arr = Array.isArray(data.items) ? data.items : [];
-          setItems(
-            arr.map((s) => ({
-              id: s.id,
-              nosis: s.nosis,
-              nama: s.nama,
-              nik: s.nik,
-            }))
-          );
-          setOpenList(true);
-        }
-      } catch (e) {
-        if (!stop) setItems([]);
+        const data = await r.json().catch(() => ({}));
+        if (stop) return;
+        setSug(
+          (Array.isArray(data.items) ? data.items : []).map((s) => ({
+            id: s.id,
+            nosis: s.nosis,
+            nama: s.nama,
+            nik: s.nik,
+          }))
+        );
+        setOpenList(true);
+      } catch {
+        if (!stop) setSug([]);
       } finally {
         if (!stop) setSearching(false);
       }
@@ -68,37 +204,53 @@ export default function InputPrestasi() {
     };
   }, [q]);
 
+  useEffect(() => {
+    function onDocClick(e) {
+      const inInput = inputRef.current?.contains?.(e.target);
+      const inList = listRef.current?.contains?.(e.target);
+      if (!inInput && !inList) setOpenList(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
   function pickSiswa(s) {
     setSelectedSiswa(s);
     setQuery(`${s.nosis} — ${s.nama}`);
     setOpenList(false);
   }
-
-  function clearSiswa() {
-    setSelectedSiswa(null);
+  function clearForm() {
     setQuery("");
-    inputRef.current?.focus();
+    setSelectedSiswa(null);
+    setJudul("");
+    setTingkat("");
+    setDeskripsi("");
+    setTanggal(new Date().toISOString().slice(0, 10));
+    setFile(null);
+    const el = document.getElementById("prestasiFileInput");
+    if (el) el.value = "";
   }
 
+  /* ---------- submit ---------- */
   async function submit() {
-    setMsg("");
-
+    setAlert({ type: "", text: "" });
     if (!selectedSiswa?.id) {
-      setMsg("Pilih siswa dari daftar terlebih dahulu.");
+      setAlert({
+        type: "danger",
+        text: "Pilih siswa dari daftar terlebih dahulu.",
+      });
       return;
     }
     if (!judul.trim()) {
-      setMsg("Judul wajib diisi.");
+      setAlert({ type: "danger", text: "Judul wajib diisi." });
       return;
     }
     if (!tingkat.trim()) {
-      setMsg("Tingkatan wajib diisi.");
+      setAlert({ type: "danger", text: "Tingkatan wajib diisi." });
       return;
     }
-    // file opsional; jika wajib, tambahkan validasi di sini.
-
     try {
-      setLoading(true);
+      setSaving(true);
       const token = await window.authAPI?.getToken?.();
       const form = new FormData();
       form.append("siswa_id", String(selectedSiswa.id));
@@ -113,12 +265,16 @@ export default function InputPrestasi() {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
       });
-
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Gagal menyimpan prestasi");
 
-      setMsg("Berhasil disimpan.");
-      // reset sebagian field (jaga pilihan siswa tetap)
+      setAlert({
+        type: "success",
+        text: `Berhasil disimpan untuk ${selectedSiswa.nosis} — ${selectedSiswa.nama}.`,
+      });
+      // refresh list
+      setPage(1);
+      // biarkan modal tetap terbuka; reset field selain siswa
       setJudul("");
       setTingkat("");
       setDeskripsi("");
@@ -126,29 +282,16 @@ export default function InputPrestasi() {
       const el = document.getElementById("prestasiFileInput");
       if (el) el.value = "";
     } catch (e) {
-      setMsg(`Gagal: ${e.message}`);
+      setAlert({ type: "danger", text: `Gagal: ${e.message}` });
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
-  function back() {
-    window.location.hash = "#/import";
-  }
-
-  // tutup dropdown saat klik di luar
-  useEffect(() => {
-    function onDocClick(e) {
-      const inInput = inputRef.current?.contains?.(e.target);
-      const inList = listRef.current?.contains?.(e.target);
-      if (!inInput && !inList) setOpenList(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
-
+  /* ---------- UI ---------- */
   return (
     <div className="grid">
+      {/* Header + button */}
       <div
         className="card"
         style={{
@@ -160,23 +303,171 @@ export default function InputPrestasi() {
         <div>
           <div style={{ fontWeight: 800, fontSize: 18 }}>Input Prestasi</div>
           <div className="muted">
-            Masukkan prestasi per siswa (bisa lampirkan file apa saja)
+            Catat prestasi per-siswa, lampiran opsional.
           </div>
         </div>
-        <button className="btn" onClick={back}>
-          Kembali
+        <button className="btn" onClick={() => setOpen(true)}>
+          + Input Prestasi
         </button>
       </div>
 
-      <div className="card">
-        {/* Siswa & Tanggal */}
-        <div className="grid grid-2" style={{ position: "relative", gap: 12 }}>
-          <div style={{ position: "relative" }}>
+      {/* Alerts di atas tabel */}
+      {alert.text && (
+        <div
+          className="card"
+          style={{
+            border: `1px solid ${
+              alert.type === "success" ? "#166534" : "#7f1d1d"
+            }`,
+            background: alert.type === "success" ? "#052e1a" : "#1b0c0c",
+            color: alert.type === "success" ? "#86efac" : "#fca5a5",
+            padding: "8px 12px",
+            borderRadius: 12,
+          }}
+        >
+          {alert.text}
+        </div>
+      )}
+
+      {/* Toolbar kecil list */}
+      <div
+        className="card"
+        style={{ display: "flex", gap: 8, alignItems: "center" }}
+      >
+        <input
+          className="input"
+          placeholder="Cari judul / nama / nosis …"
+          value={qHist}
+          onChange={(e) => {
+            setQHist(e.target.value);
+            setPage(1);
+          }}
+          style={{ minWidth: 280 }}
+        />
+        <div style={{ marginLeft: "auto", color: "#94a3b8" }}>
+          Total: {total}
+        </div>
+      </div>
+
+      {/* Tabel history */}
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div
+          className="table-wrap"
+          style={{ maxHeight: "60vh", overflow: "auto" }}
+        >
+          <table className="table" style={{ width: "100%" }}>
+            <thead
+              style={{
+                position: "sticky",
+                top: 0,
+                background: "#0b1220",
+                zIndex: 1,
+              }}
+            >
+              <tr>
+                <th style={{ textAlign: "left" }}>NOSIS</th>
+                <th style={{ textAlign: "left" }}>Nama</th>
+                <th style={{ textAlign: "left" }}>Judul</th>
+                <th style={{ textAlign: "left" }}>Tingkat</th>
+                <th style={{ textAlign: "left" }}>Tanggal</th>
+                <th style={{ textAlign: "left" }}>File</th>
+                <th style={{ textAlign: "left" }}>Dibuat</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loadingList ? (
+                <tr>
+                  <td colSpan={7} className="muted" style={{ padding: 12 }}>
+                    Memuat…
+                  </td>
+                </tr>
+              ) : items.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="muted" style={{ padding: 12 }}>
+                    Tidak ada data.
+                  </td>
+                </tr>
+              ) : (
+                items.map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ whiteSpace: "nowrap" }}>{r.nosis ?? "-"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{r.nama ?? "-"}</td>
+                    <td>{r.judul ?? "-"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{r.tingkat ?? "-"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {fmtDate(r.tanggal)}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {r.file_path ? (
+                        <button
+                          className="btn"
+                          style={{ padding: "6px 10px" }}
+                          onClick={async () => {
+                            const url = buildDownloadUrl(r.file_path);
+                            if (!(await tryHead(url))) {
+                              setAlert({
+                                type: "danger",
+                                text: "File tidak ditemukan.",
+                              });
+                              return;
+                            }
+                            if (window.electronAPI?.download) {
+                              window.electronAPI.download(url);
+                            } else {
+                              const a = document.createElement("a");
+                              a.href = url;
+                              a.download = "";
+                              document.body.appendChild(a);
+                              a.click();
+                              a.remove();
+                            }
+                          }}
+                        >
+                          Download
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {fmtDate(r.created_at)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Pagination */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button
+          className="btn"
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page <= 1}
+        >
+          Prev
+        </button>
+        <span className="badge">Page {page}</span>
+        <button
+          className="btn"
+          onClick={() => setPage((p) => p + 1)}
+          disabled={items.length < limit}
+        >
+          Next
+        </button>
+      </div>
+
+      {/* Modal Form */}
+      <Modal open={open} onClose={() => setOpen(false)} title="Input Prestasi">
+        {/* Cari siswa + tanggal */}
+        <div className="grid grid-2" style={{ gap: 12, position: "relative" }}>
+          <div ref={inputRef} style={{ position: "relative" }}>
             <label className="muted">Cari NOSIS / Nama</label>
             <input
-              ref={inputRef}
               className="input"
-              placeholder="Ketik NOSIS (mis. 0123) atau Nama (min. 2 huruf)"
+              placeholder="Ketik min. 2 huruf lalu pilih dari daftar"
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -186,35 +477,16 @@ export default function InputPrestasi() {
               autoComplete="off"
             />
             {selectedSiswa && (
-              <div
-                className="muted"
-                style={{
-                  marginTop: 6,
-                  display: "flex",
-                  gap: 8,
-                  alignItems: "center",
-                }}
-              >
-                <span>
-                  Terpilih: <b>{selectedSiswa.nosis}</b> — {selectedSiswa.nama}{" "}
-                  {selectedSiswa.nik ? (
-                    <span style={{ color: "#64748b" }}>
-                      (NIK {selectedSiswa.nik})
-                    </span>
-                  ) : null}
-                </span>
-                <button
-                  className="btn"
-                  style={{ padding: "4px 8px" }}
-                  onClick={clearSiswa}
-                >
-                  Ganti
-                </button>
+              <div className="muted" style={{ marginTop: 6 }}>
+                Terpilih: <b>{selectedSiswa.nosis}</b> — {selectedSiswa.nama}{" "}
+                {selectedSiswa.nik ? (
+                  <span style={{ color: "#64748b" }}>
+                    (NIK {selectedSiswa.nik})
+                  </span>
+                ) : null}
               </div>
             )}
 
-            {/* Dropdown hasil pencarian */}
-            {/* Dropdown hasil pencarian */}
             {openList && (
               <div
                 ref={listRef}
@@ -224,39 +496,38 @@ export default function InputPrestasi() {
                   left: 0,
                   right: 0,
                   marginTop: 6,
-                  // ⬇⬇ WAS: background: "#0f1424", border: "#334155"
-                  background: "#1e293b", // slate-800 (lebih terang, tidak hitam)
-                  border: "1px solid #475569", // slate-600
+                  background: "#1e293b",
+                  border: "1px solid #475569",
                   borderRadius: 10,
                   boxShadow: "0 10px 20px rgba(0,0,0,.35)",
                   maxHeight: 280,
                   overflow: "auto",
-                  color: "#e2e8f0", // teks terang
+                  color: "#e2e8f0",
                 }}
               >
                 <div
                   className="muted"
                   style={{
                     padding: "8px 10px",
-                    borderBottom: "1px solid #334155", // slate-700
-                    color: "#cbd5e1", // slate-300
-                    background: "#243447", // sedikit kontras header
+                    borderBottom: "1px solid #334155",
+                    color: "#cbd5e1",
+                    background: "#243447",
                   }}
                 >
                   {searching ? "Mencari..." : "Pilih dari daftar:"}
                 </div>
 
-                {items.length === 0 ? (
+                {filteredSug.length === 0 ? (
                   <div
                     className="muted"
-                    style={{ padding: "10px", color: "#cbd5e1" }}
+                    style={{ padding: 10, color: "#cbd5e1" }}
                   >
                     {q.length < 2
                       ? "Ketik minimal 2 karakter."
                       : "Tidak ada hasil."}
                   </div>
                 ) : (
-                  items.map((s) => (
+                  filteredSug.map((s) => (
                     <button
                       key={s.id}
                       type="button"
@@ -265,9 +536,8 @@ export default function InputPrestasi() {
                         width: "100%",
                         textAlign: "left",
                         padding: "10px 12px",
+                        background: "#1f2a3a",
                         border: 0,
-                        // ⬇⬇ WAS: background: "transparent", borderBottom: "#111827"
-                        background: "#1f2a3a", // slate-850-ish
                         borderBottom: "1px solid #334155",
                         cursor: "pointer",
                         color: "#e5e7eb",
@@ -275,13 +545,13 @@ export default function InputPrestasi() {
                       onMouseDown={(e) => e.preventDefault()}
                       onMouseEnter={(e) =>
                         (e.currentTarget.style.background = "#2b3a55")
-                      } // hover: sedikit lebih terang
+                      }
                       onMouseLeave={(e) =>
                         (e.currentTarget.style.background = "#1f2a3a")
                       }
                     >
                       <div style={{ fontWeight: 700 }}>
-                        {s.nosis?.padStart(4, "0")} — {s.nama}
+                        {String(s.nosis || "-").padStart(4, "0")} — {s.nama}
                       </div>
                       <div
                         className="muted"
@@ -323,13 +593,13 @@ export default function InputPrestasi() {
           <label className="muted">Tingkatan</label>
           <input
             className="input"
-            placeholder="Mis. Kabupaten / Provinsi / Nasional / Internasional"
+            placeholder="Kabupaten / Provinsi / Nasional / Internasional"
             value={tingkat}
             onChange={(e) => setTingkat(e.target.value)}
           />
         </div>
 
-        {/* Deskripsi / Catatan */}
+        {/* Deskripsi */}
         <div style={{ marginTop: 10 }}>
           <label className="muted">Catatan / Deskripsi</label>
           <textarea
@@ -341,9 +611,9 @@ export default function InputPrestasi() {
           />
         </div>
 
-        {/* File bebas */}
+        {/* File */}
         <div style={{ marginTop: 10 }}>
-          <label className="muted">Lampiran (opsional, file bebas)</label>
+          <label className="muted">Lampiran (opsional)</label>
           <input
             id="prestasiFileInput"
             type="file"
@@ -356,26 +626,16 @@ export default function InputPrestasi() {
           )}
         </div>
 
-        {/* Pesan */}
-        {msg && (
-          <div
-            style={{
-              marginTop: 10,
-              color: msg.startsWith("Berhasil") ? "#86efac" : "#fca5a5",
-              whiteSpace: "pre-line",
-            }}
-          >
-            {msg}
-          </div>
-        )}
-
-        {/* Tombol */}
-        <div style={{ marginTop: 12 }}>
-          <button className="btn" disabled={loading} onClick={submit}>
-            {loading ? "Menyimpan..." : "Simpan"}
+        {/* Action */}
+        <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+          <button className="btn" disabled={saving} onClick={submit}>
+            {saving ? "Menyimpan..." : "Simpan"}
+          </button>
+          <button className="btn" onClick={clearForm} disabled={saving}>
+            Reset
           </button>
         </div>
-      </div>
+      </Modal>
     </div>
   );
 }

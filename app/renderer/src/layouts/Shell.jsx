@@ -1,28 +1,150 @@
 // components/Shell.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ShellContext } from "../context/ShellContext";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
+function isActiveHref(href) {
+  if (!href) return false;
+  const hash = window.location.hash || "#/dashboard";
+  // contoh href "#/import/siswa" -> aktif kalau hash diawali itu
+  return hash.startsWith(href);
+}
+
+function SideLink({ item }) {
+  const active = isActiveHref(item.href);
+  return (
+    <a
+      href={item.href}
+      className="side-link"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 12px",
+        borderRadius: 10,
+        border: active ? "1px solid #1f2937" : "1px solid transparent",
+        background: active ? "#0f1424" : "transparent",
+        color: "#cbd5e1",
+        textDecoration: "none",
+        fontWeight: 600,
+      }}
+      title={item.label}
+    >
+      {item.icon && <span style={{ fontSize: 16 }}>{item.icon}</span>}
+      <span>{item.label}</span>
+    </a>
+  );
+}
+
+function SideGroup({ item }) {
+  const [hash, setHash] = useState(window.location.hash || "#/dashboard");
+
+  useEffect(() => {
+    const h = () => setHash(window.location.hash || "#/dashboard");
+    window.addEventListener("hashchange", h);
+    return () => window.removeEventListener("hashchange", h);
+  }, []);
+
+  const hasActiveChild = useMemo(() => {
+    if (!item?.children?.length) return false;
+    return item.children.some((c) => c.href && hash.startsWith(c.href));
+  }, [item, hash]);
+
+  const [open, setOpen] = useState(hasActiveChild);
+
+  useEffect(() => {
+    if (hasActiveChild) setOpen(true);
+  }, [hasActiveChild]);
+
+  const toggle = (e) => {
+    e.preventDefault();
+    setOpen((v) => !v);
+  };
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <button
+        className="side-link"
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle(e);
+          }
+        }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          width: "100%",
+          padding: "10px 12px",
+          borderRadius: 10,
+          border: open ? "1px solid #1f2937" : "1px solid transparent",
+          background: open ? "#0f1424" : "transparent",
+          color: "#cbd5e1",
+          cursor: "pointer",
+          textAlign: "left",
+          fontWeight: 800,
+        }}
+        aria-expanded={open}
+        aria-controls={`group-${item.key}`}
+      >
+        {item.icon && <span style={{ fontSize: 16 }}>{item.icon}</span>}
+        <span>{item.label}</span>
+        <span style={{ marginLeft: "auto", opacity: 0.8 }}>
+          {open ? "▾" : "▸"}
+        </span>
+      </button>
+
+      {open && (
+        <div
+          id={`group-${item.key}`}
+          style={{
+            marginTop: 6,
+            marginLeft: 8,
+            paddingLeft: 10,
+            borderLeft: "2px solid rgba(255,255,255,0.07)",
+            display: "grid",
+            gap: 6,
+          }}
+        >
+          {item.children.map((c) => (
+            <div key={c.key}>
+              {c.separator && (
+                <div
+                  style={{
+                    height: 1,
+                    background: "rgba(255, 255, 255, 0.12)",
+                    margin: "6px 0",
+                  }}
+                />
+              )}
+              <SideLink item={c} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Shell({
   title = "SISTEM AKADEMIK",
   children,
   onLogout,
   nav = [],
-  active,
-  showAngkatan = false, // <<< baru: kontrol tampil/tidak dropdown
-  onAngkatanChange, // <<< opsional: callback ke halaman
+  active, // tidak dipakai lagi untuk highlight; kita pakai hash agar child bisa aktif
+  showAngkatan = false,
+  onAngkatanChange,
 }) {
-  // simpan pilihan user
   const [angkatan, setAngkatan] = useState(
     () => localStorage.getItem("sa.angkatan") || ""
   );
   const [angkatanOpts, setAngkatanOpts] = useState([]);
 
-  // load opsi angkatan HANYA kalau perlu
   useEffect(() => {
-    if (!showAngkatan) return; // tidak fetch kalau dropdown tidak dipakai
-
+    if (!showAngkatan) return;
     let alive = true;
     (async () => {
       try {
@@ -48,7 +170,6 @@ export default function Shell({
     };
   }, [showAngkatan]);
 
-  // persist + notify ke halaman saat berubah
   useEffect(() => {
     localStorage.setItem("sa.angkatan", angkatan || "");
     if (typeof onAngkatanChange === "function") onAngkatanChange(angkatan);
@@ -63,47 +184,61 @@ export default function Shell({
           height: "100vh",
         }}
       >
-        {/* Sidebar (tetap ada) */}
+        {/* Sidebar */}
         <aside
           style={{
             background: "#0b1220",
             borderRight: "1px solid #1f2937",
             padding: 16,
-            position: "relative",
+            display: "flex",
+            flexDirection: "column",
+            height: "100vh",
+            width: 240,
           }}
         >
+          {/* Brand */}
           <div
             style={{
               fontWeight: 800,
               fontSize: 18,
               letterSpacing: 0.5,
-              marginBottom: 16,
+              marginBottom: 12,
+              color: "#e2e8f0",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
             }}
           >
             SISTEM AKADEMIK
           </div>
-          <nav className="grid">
-            {nav.map((item) => (
-              <a
-                key={item.key}
-                href={item.href}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  background: active === item.key ? "#0f1424" : "transparent",
-                  border:
-                    active === item.key
-                      ? "1px solid #1f2937"
-                      : "1px solid transparent",
-                  color: "#cbd5e1",
-                }}
-              >
-                {item.label}
-              </a>
-            ))}
-          </nav>
-          <div style={{ position: "absolute", bottom: 16 }}>
-            <button className="btn" onClick={onLogout}>
+
+          {/* NAV AREA (scrollable) */}
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              paddingRight: 4, // ruang untuk scrollbar
+            }}
+            className="scroll-slim"
+          >
+            <nav style={{ display: "grid", gap: 8 }}>
+              {nav.map((item) =>
+                item.children?.length ? (
+                  <SideGroup key={item.key} item={item} />
+                ) : (
+                  <SideLink key={item.key} item={item} />
+                )
+              )}
+            </nav>
+          </div>
+
+          {/* FOOTER (non-scroll) */}
+          <div style={{ paddingTop: 12 }}>
+            <button
+              className="btn"
+              onClick={onLogout}
+              style={{ width: "100%" }}
+            >
               Logout
             </button>
           </div>
@@ -121,12 +256,12 @@ export default function Shell({
               borderBottom: "1px solid #1f2937",
               background: "#0b1220",
               gap: 12,
+              color: "#e2e8f0",
             }}
           >
             <div style={{ fontWeight: 700 }}>{title}</div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              {/* Dropdown Angkatan hanya saat diminta */}
               {showAngkatan && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <label

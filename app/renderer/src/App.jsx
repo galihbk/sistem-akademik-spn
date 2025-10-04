@@ -9,7 +9,7 @@ import Siswa from "./pages/Siswa";
 import SiswaDetail from "./pages/SiswaDetail";
 
 // Import/Upload/Input pages
-import ImportIndex from "./pages/ImportIndex";
+import ImportIndex from "./pages/ImportIndex"; // boleh tetap ada, tapi tak dipakai di nav
 import ImportSiswa from "./pages/ImportSiswa";
 import ImportSosiometri from "./pages/ImportSosiometri";
 import ImportMental from "./pages/ImportMental";
@@ -154,12 +154,57 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  // ======== NAV BARU: submenu Import di sidebar ========
   const nav = useMemo(
     () => [
-      { key: "dashboard", label: "Dashboard", href: "#/dashboard" },
-      { key: "siswa", label: "Siswa", href: "#/siswa" },
-      { key: "import", label: "Import", href: "#/import" },
-      { key: "settings", label: "Settings", href: "#/settings" },
+      { key: "dashboard", label: "Dashboard", href: "#/dashboard", icon: "🏠" },
+      { key: "siswa", label: "Siswa", href: "#/siswa", icon: "👥" },
+      {
+        key: "import",
+        label: "Data",
+        icon: "⬇️",
+        children: [
+          {
+            key: "import-siswa",
+            label: "Data Siswa",
+            href: "#/import/siswa",
+          },
+          {
+            key: "import-mental",
+            label: "Nilai Mental",
+            href: "#/import/mental",
+          },
+          {
+            key: "import-mapel",
+            label: "Nilai Mapel",
+            href: "#/import/mapel",
+          },
+          {
+            key: "import-jasmani",
+            label: "Nilai Jasmani",
+            href: "#/import/jasmani",
+          },
+          { key: "sep-1", separator: true },
+          { key: "upload-bk", label: "Upload BK (PDF)", href: "#/upload/bk" },
+          {
+            key: "upload-pelanggaran",
+            label: "Pelanggaran (PDF)",
+            href: "#/upload/pelanggaran",
+          },
+          { key: "sep-2", separator: true },
+          {
+            key: "input-prestasi",
+            label: "Prestasi",
+            href: "#/input/prestasi",
+          },
+          {
+            key: "input-riwayat",
+            label: "Riwayat Kesehatan",
+            href: "#/input/riwayat-kesehatan",
+          },
+        ],
+      },
+      { key: "settings", label: "Settings", href: "#/settings", icon: "⚙️" },
     ],
     []
   );
@@ -182,46 +227,42 @@ export default function App() {
   } else if (route.name === "siswaDetail") {
     title = "Detail Siswa";
     active = "siswa";
-    // <<<<<<<<<<<<<<<<<<<<<<<<<<<<< FIX: kirim nik, bukan nosis
     content = <SiswaDetail nik={route.params.nik} />;
   } else if (route.name === "importIndex") {
-    title = "Import & Upload";
+    // tidak dipakai di menu, tapi tetap support URL #/import
+    title = "Data";
     active = "import";
     content = <ImportIndex />;
   } else if (route.name === "importSiswa") {
-    title = "Import Data Siswa";
+    title = "Data Siswa";
     active = "import";
     content = <ImportSiswa />;
-  } else if (route.name === "importSosiometri") {
-    title = "Import Sosiometri";
-    active = "import";
-    content = <ImportSosiometri />;
   } else if (route.name === "importMental") {
-    title = "Import Mental";
+    title = "Mental";
     active = "import";
     content = <ImportMental />;
   } else if (route.name === "importMapel") {
-    title = "Import Mapel";
+    title = "Mapel";
     active = "import";
     content = <ImportMapel />;
   } else if (route.name === "importJasmani") {
-    title = "Import Jasmani";
+    title = "Jasmani";
     active = "import";
     content = <ImportJasmani />;
   } else if (route.name === "uploadBK") {
-    title = "Upload BK (PDF)";
+    title = "BK (PDF)";
     active = "import";
     content = <UploadPdf kind="bk" />;
   } else if (route.name === "uploadPelanggaran") {
-    title = "Upload Pelanggaran (PDF)";
+    title = "Pelanggaran (PDF)";
     active = "import";
     content = <UploadPdf kind="pelanggaran" />;
   } else if (route.name === "inputPrestasi") {
-    title = "Input Prestasi";
+    title = "Prestasi";
     active = "import";
     content = <InputPrestasi />;
   } else if (route.name === "inputRiwayatKesehatan") {
-    title = "Input Riwayat Kesehatan";
+    title = "Riwayat Kesehatan";
     active = "import";
     content = <InputRiwayatKesehatan />;
   } else if (route.name === "settings") {

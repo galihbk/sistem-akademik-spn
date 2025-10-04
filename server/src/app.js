@@ -14,6 +14,8 @@ const prestasiRoutes = require("./routes/prestasi.routes");
 const downloadRoutes = require("./routes/download.routes"); // <-- TAMBAH
 const riwayatRoutes = require("./routes/riwayat.routes");
 const exportRoutes = require("./routes/export.routes");
+const mentalRoutes = require("./routes/mental.routes");
+const makeDocsRoutes = require("./routes/docs.routes");
 
 const app = express();
 app.use(helmet());
@@ -31,6 +33,9 @@ app.use("/upload", require("./routes/upload.routes"));
 app.use("/prestasi", prestasiRoutes);
 app.use("/riwayat_kesehatan", riwayatRoutes);
 app.use("/export", exportRoutes);
+app.use("/mental", mentalRoutes);
+app.use("/bk", makeDocsRoutes("bk"));
+app.use("/pelanggaran", makeDocsRoutes("pelanggaran"));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/health/db", async (_req, res) => {

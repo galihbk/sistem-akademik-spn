@@ -9,39 +9,33 @@ const REASON_TEXT = {
   no_nik_or_nosis: "Tidak ada NIK maupun NOSIS (baris dilewati).",
   siswa_not_found: "Siswa tidak ditemukan.",
 };
-
-function translateReason(code) {
-  return REASON_TEXT[code] || code || "-";
-}
+const translateReason = (code) => REASON_TEXT[code] || code || "-";
 
 export default function ImportExcel({
   endpoint,
   title,
   requireAngkatan = false,
+  onAfterImport, // callback ke halaman: {success, summary}
 }) {
   const [file, setFile] = useState(null);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
-
-  // Tabs
   const [activeTab, setActiveTab] = useState(null); // "ok" | "skip" | "fail"
-
-  // Angkatan
   const [angkatanOpts, setAngkatanOpts] = useState([]);
   const [angkatan, setAngkatan] = useState("");
 
-  // Warn user if try to close page while loading
+  // ringkasan terakhir (untuk badge kecil di atas tab)
+  const [lastImport, setLastImport] = useState(null); // { mode:'dry'|'import', ok, skip, fail }
+
+  // warn before unload
   useEffect(() => {
     function handleBeforeUnload(e) {
       if (!loading) return;
       e.preventDefault();
-      // Chrome requires returnValue to be set.
       e.returnValue = "Proses import sedang berjalan. Jangan tutup halaman.";
       return e.returnValue;
     }
-    if (loading) {
-      window.addEventListener("beforeunload", handleBeforeUnload);
-    }
+    if (loading) window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [loading]);
 
@@ -76,6 +70,17 @@ export default function ImportExcel({
       alive = false;
     };
   }, [requireAngkatan]);
+
+  function summarize(payload) {
+    const ok = payload?.ok ?? payload?.detailLists?.ok?.length ?? 0;
+    const skip = payload?.skip ?? payload?.detailLists?.skip?.length ?? 0;
+    const fail = payload?.fail ?? payload?.detailLists?.fail?.length ?? 0;
+    return {
+      ok: Number(ok) || 0,
+      skip: Number(skip) || 0,
+      fail: Number(fail) || 0,
+    };
+  }
 
   async function requestImport(dryRun) {
     if (!file) return;
@@ -123,7 +128,7 @@ export default function ImportExcel({
 
       setResult(normalized);
 
-      // Pilih tab default: fail > skip > ok
+      // Tab default: fail > skip > ok
       if (!("error" in data)) {
         if ((normalized.fail ?? 0) > 0 || normalized.detailLists.fail.length) {
           setActiveTab("fail");
@@ -136,15 +141,34 @@ export default function ImportExcel({
           setActiveTab("ok");
         }
       }
+
+      // Ringkasan & status
+      const s = summarize(normalized);
+      setLastImport({ mode: dryRun ? "dry" : "import", ...s });
+
+      // Callback sukses setelah import (non-dry-run)
+      const success = res.ok && !dryRun && !data?.error;
+      if (!dryRun && typeof onAfterImport === "function") {
+        onAfterImport({
+          success,
+          summary: s,
+          raw: normalized,
+        });
+      }
     } catch (e) {
       setResult({ error: e.message || "Gagal import" });
+      setLastImport({
+        mode: dryRun ? "dry" : "import",
+        ok: 0,
+        skip: 0,
+        fail: 1,
+      });
+      if (!dryRun && typeof onAfterImport === "function") {
+        onAfterImport({ success: false, summary: { ok: 0, skip: 0, fail: 1 } });
+      }
     } finally {
       setLoading(false);
     }
-  }
-
-  function back() {
-    window.location.hash = "#/import";
   }
 
   const lists = useMemo(
@@ -170,13 +194,9 @@ export default function ImportExcel({
           <div style={{ fontWeight: 800, fontSize: 18 }}>{title}</div>
           <div className="muted">Gunakan file .xlsx sesuai template</div>
         </div>
-        <button className="btn" onClick={back} disabled={loading}>
-          Kembali
-        </button>
       </div>
 
       <div className="card">
-        {/* BANNER PERINGATAN SAAT LOADING */}
         {loading && (
           <div
             role="status"
@@ -193,6 +213,31 @@ export default function ImportExcel({
           >
             ⏳ Import sedang diproses. <b>Jangan tutup / refresh halaman ini</b>{" "}
             sampai proses selesai.
+          </div>
+        )}
+
+        {/* Badge ringkasan terakhir */}
+        {lastImport && (
+          <div
+            style={{
+              marginBottom: 10,
+              display: "flex",
+              gap: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <span
+              className="badge"
+              style={{ background: "#0f172a", border: "1px solid #334155" }}
+            >
+              Mode:{" "}
+              <b style={{ marginLeft: 6 }}>
+                {lastImport.mode === "dry" ? "Cek (Dry Run)" : "Import"}
+              </b>
+            </span>
+            <span className="badge">OK: {lastImport.ok}</span>
+            <span className="badge">Skip: {lastImport.skip}</span>
+            <span className="badge">Fail: {lastImport.fail}</span>
           </div>
         )}
 
@@ -278,7 +323,7 @@ export default function ImportExcel({
                     )}
                 </div>
 
-                {/* TAB HEADERS (tombol besar) */}
+                {/* TAB HEADERS */}
                 <div
                   style={{
                     marginTop: 12,
@@ -452,7 +497,7 @@ function TabButton({ label, active, onClick, color, disabled }) {
   );
 }
 
-/** Overlay loading full-screen area dalam komponen */
+/** Overlay loading */
 function LoadingOverlay() {
   return (
     <div
@@ -493,7 +538,6 @@ function LoadingOverlay() {
     </div>
   );
 }
-
 function Spinner() {
   return (
     <div

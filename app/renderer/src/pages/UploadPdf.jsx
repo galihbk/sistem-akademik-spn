@@ -7,48 +7,101 @@ function norm(s) {
   return String(s || "")
     .toLowerCase()
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "") // hapus diakritik
-    .replace(/\s+/g, ""); // hapus spasi
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "");
+}
+
+function Modal({ open, title, onClose, children, width = 720 }) {
+  if (!open) return null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(3,6,17,0.66)",
+        backdropFilter: "blur(2px)",
+        zIndex: 1000,
+        display: "grid",
+        placeItems: "center",
+        padding: 16,
+      }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose?.();
+      }}
+    >
+      <div
+        className="card"
+        style={{
+          width: "100%",
+          maxWidth: width,
+          background: "#0b1220",
+          border: "1px solid #1f2937",
+          borderRadius: 14,
+          padding: 0,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            padding: "12px 14px",
+            borderBottom: "1px solid #1f2937",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+          }}
+        >
+          <div style={{ fontWeight: 800 }}>{title}</div>
+          <button className="btn" onClick={onClose}>
+            Tutup
+          </button>
+        </div>
+        <div style={{ padding: 14 }}>{children}</div>
+      </div>
+    </div>
+  );
 }
 
 export default function UploadPdf({ kind }) {
-  const title = useMemo(
-    () => (kind === "bk" ? "Upload BK (PDF)" : "Upload Pelanggaran (PDF)"),
-    [kind]
-  );
+  const isBK = kind === "bk";
+  const title = isBK ? "Upload BK (PDF)" : "Upload Pelanggaran (PDF)";
 
+  const [open, setOpen] = useState(false);
+
+  // form (modal)
   const [query, setQuery] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [judul, setJudul] = useState("");
   const [file, setFile] = useState(null);
+  const [selected, setSelected] = useState(null);
 
-  // kandidat & pilihan
-  const [items, setItems] = useState([]); // hasil fetch (mentah)
+  // dropdown siswa
+  const [items, setItems] = useState([]);
   const [openList, setOpenList] = useState(false);
-  const [selected, setSelected] = useState(null); // {id, nosis, nama, nik}
-
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
-
   const boxRef = useRef(null);
   const timerRef = useRef(null);
 
-  // Filter ketat di sisi client (ILike nosis/nama)
+  // history
+  const [history, setHistory] = useState([]);
+  const [histLoading, setHistLoading] = useState(false);
+
+  // alerts (di atas tabel)
+  const [alert, setAlert] = useState({ type: "", text: "" }); // type: "success" | "danger" | ""
+
+  // ===== filtered siswa (client) =====
   const filtered = useMemo(() => {
     const q = norm(query);
     if (!q || q.length < 2) return [];
-    const arr = Array.isArray(items) ? items : [];
-    return arr
-      .filter((it) => {
-        const a = norm(it.nosis);
-        const b = norm(it.nama);
-        return a.includes(q) || b.includes(q);
-      })
+    return (items || [])
+      .filter((it) => norm(it.nosis).includes(q) || norm(it.nama).includes(q))
       .slice(0, 20);
   }, [items, query]);
 
-  // Debounced fetch saat query berubah
+  // debounce fetch siswa
   useEffect(() => {
+    if (!open) return;
     if (timerRef.current) clearTimeout(timerRef.current);
 
     const q = query.trim();
@@ -67,11 +120,10 @@ export default function UploadPdf({ kind }) {
         console.error("[UploadPdf] fetchSiswa:", e);
       }
     }, 300);
-
     return () => clearTimeout(timerRef.current);
-  }, [query]);
+  }, [query, open]);
 
-  // Tutup dropdown ketika klik di luar
+  // close dropdown on outside click
   useEffect(() => {
     function onDocClick(e) {
       if (!boxRef.current) return;
@@ -81,37 +133,69 @@ export default function UploadPdf({ kind }) {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
+  // ====== HISTORY (pakai endpoint baru /bk atau /pelanggaran) ======
+  async function loadHistory() {
+    try {
+      setHistLoading(true);
+      const token = await window.authAPI?.getToken?.();
+      const u = new URL(`${API}/${isBK ? "bk" : "pelanggaran"}`);
+      u.searchParams.set("page", "1");
+      u.searchParams.set("limit", "20");
+      u.searchParams.set("sort_dir", "desc");
+      const r = await fetch(u.toString(), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await r.json().catch(() => ({}));
+      const arr = Array.isArray(data.items)
+        ? data.items
+        : Array.isArray(data)
+        ? data
+        : [];
+      setHistory(arr);
+    } catch (e) {
+      console.error("[UploadPdf] loadHistory:", e);
+      setHistory([]);
+      setAlert({ type: "danger", text: "Gagal memuat riwayat." });
+    } finally {
+      setHistLoading(false);
+    }
+  }
+  useEffect(() => {
+    loadHistory();
+  }, [kind]);
+
+  // ====== actions ======
   function onPick(it) {
-    setSelected(it); // simpan {id, nosis, nama, nik}
+    setSelected(it);
     setQuery(`${it.nosis} — ${it.nama}`);
     setOpenList(false);
   }
 
   async function submit() {
-    setMsg("");
+    setAlert({ type: "", text: "" });
+
     if (!selected?.id) {
-      setMsg("Silakan pilih siswa dari daftar.");
+      setAlert({ type: "danger", text: "Silakan pilih siswa dari daftar." });
       return;
     }
     if (!judul.trim() || !file) {
-      setMsg("Lengkapi Judul dan File.");
+      setAlert({ type: "danger", text: "Lengkapi Judul dan File." });
       return;
     }
     if (file.type !== "application/pdf") {
-      setMsg("File harus PDF.");
+      setAlert({ type: "danger", text: "File harus PDF." });
       return;
     }
 
     try {
-      setLoading(true);
       const token = await window.authAPI?.getToken?.();
       const form = new FormData();
       form.append("file", file);
-      form.append("siswa_id", String(selected.id)); // <- pakai siswa_id!
+      form.append("siswa_id", String(selected.id));
       form.append("judul", judul.trim());
       form.append("tanggal", date);
 
-      const res = await fetch(`${API}/upload/${kind}`, {
+      const res = await fetch(`${API}/upload/${isBK ? "bk" : "pelanggaran"}`, {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
@@ -119,14 +203,56 @@ export default function UploadPdf({ kind }) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Gagal upload");
 
-      setMsg(`Berhasil diunggah untuk ${selected.nosis} — ${selected.nama}.`);
+      // reset form & close
       setFile(null);
-      const inp = document.getElementById("pdfInput");
-      if (inp) inp.value = "";
+      setSelected(null);
+      setJudul("");
+      setQuery("");
+      setOpen(false);
+
+      setAlert({ type: "success", text: "Berhasil mengunggah dokumen." });
+      await loadHistory();
     } catch (e) {
-      setMsg(`Gagal: ${e.message}`);
-    } finally {
-      setLoading(false);
+      setAlert({ type: "danger", text: `Gagal mengunggah: ${e.message}` });
+    }
+  }
+
+  function handleDownload(filePath) {
+    if (!filePath) return;
+    const clean = String(filePath)
+      .replace(/^\/+/, "")
+      .replace(/^uploads\//i, "");
+    const url = `${API}/download?path=${encodeURIComponent(clean)}`;
+    if (window.electronAPI?.download) {
+      window.electronAPI.download(url);
+    } else {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  }
+
+  async function handleDelete(row) {
+    if (!row?.id) return;
+    const ok = confirm(`Hapus "${row.judul || "-"}"?`);
+    if (!ok) return;
+    try {
+      const token = await window.authAPI?.getToken?.();
+      const r = await fetch(`${API}/${isBK ? "bk" : "pelanggaran"}/${row.id}`, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t || `HTTP ${r.status}`);
+      }
+      setAlert({ type: "success", text: "Berhasil menghapus dokumen." });
+      await loadHistory();
+    } catch (e) {
+      setAlert({ type: "danger", text: `Gagal menghapus: ${e.message}` });
     }
   }
 
@@ -134,8 +260,10 @@ export default function UploadPdf({ kind }) {
     window.location.hash = "#/import";
   }
 
+  // ====== render ======
   return (
     <div className="grid">
+      {/* Header */}
       <div
         className="card"
         style={{
@@ -148,14 +276,142 @@ export default function UploadPdf({ kind }) {
           <div style={{ fontWeight: 800, fontSize: 18 }}>{title}</div>
           <div className="muted">Lampirkan file PDF sesuai siswa</div>
         </div>
-        <button className="btn" onClick={back}>
-          Kembali
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn" onClick={() => setOpen(true)}>
+            + Upload PDF
+          </button>
+        </div>
       </div>
 
-      <div className="card">
+      {/* History + ALERTS di atas tabel */}
+      <div className="card" style={{ padding: 0 }}>
+        <div
+          style={{
+            padding: 12,
+            borderBottom: "1px solid #1f2937",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <div style={{ fontWeight: 700 }}>Riwayat Terbaru</div>
+          <button className="btn" onClick={loadHistory} disabled={histLoading}>
+            {histLoading ? "Memuat…" : "Refresh"}
+          </button>
+        </div>
+
+        {/* ALERT BANNER */}
+        {alert.type && (
+          <div
+            role="status"
+            style={{
+              margin: 12,
+              padding: "8px 12px",
+              borderRadius: 10,
+              border: `1px solid ${
+                alert.type === "success" ? "#14532d" : "#7f1d1d"
+              }`,
+              background: alert.type === "success" ? "#0b2e1a" : "#1b0c0c",
+              color: alert.type === "success" ? "#86efac" : "#fca5a5",
+            }}
+          >
+            {alert.text}
+          </div>
+        )}
+
+        <div style={{ overflowX: "auto", padding: 12 }}>
+          <table className="table" style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Judul
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  NOSIS
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Nama
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Tanggal
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  File
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Dibuat
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Aksi
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="muted" style={{ padding: 12 }}>
+                    Belum ada data.
+                  </td>
+                </tr>
+              ) : (
+                history.map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ whiteSpace: "nowrap" }}>{r.judul ?? "-"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{r.nosis ?? "-"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{r.nama ?? "-"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {r.tanggal
+                        ? new Date(r.tanggal).toLocaleDateString("id-ID")
+                        : "-"}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {r.file_path ? (
+                        <button
+                          className="btn"
+                          onClick={() => handleDownload(r.file_path)}
+                          style={{ padding: "6px 10px" }}
+                        >
+                          Download
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {r.created_at
+                        ? new Date(r.created_at).toLocaleString("id-ID")
+                        : "-"}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <button
+                        className="btn"
+                        style={{
+                          background: "#1b0c0c",
+                          border: "1px solid #7f1d1d",
+                          color: "#fca5a5",
+                          padding: "6px 10px",
+                        }}
+                        onClick={() => handleDelete(r)}
+                      >
+                        Hapus
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Modal Upload */}
+      <Modal
+        open={open}
+        title={title}
+        onClose={() => setOpen(false)}
+        width={780}
+      >
         <div className="grid grid-2">
-          {/* Input pencarian */}
           <div ref={boxRef} style={{ position: "relative" }}>
             <label className="muted">Cari NOSIS / Nama</label>
             <input
@@ -169,7 +425,6 @@ export default function UploadPdf({ kind }) {
               }}
               onFocus={() => query.trim().length >= 2 && setOpenList(true)}
             />
-            {/* Dropdown */}
             {openList && query.trim().length >= 2 && (
               <div
                 style={{
@@ -180,20 +435,19 @@ export default function UploadPdf({ kind }) {
                   marginTop: 6,
                   maxHeight: 300,
                   overflow: "auto",
-                  background: "#111827", // ⬅ bukan hitam; abu navy
-                  border: "1px solid #334155", // ⬅ border lebih terang
+                  background: "#111827",
+                  border: "1px solid #334155",
                   borderRadius: 12,
                   padding: 8,
-                  zIndex: 20,
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.25)", // sedikit elevasi
+                  zIndex: 1010,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
                 }}
               >
                 <div
                   className="muted"
-                  style={{ padding: "6px 10px", color: "#cbd5e1" }} // teks lebih jelas
+                  style={{ padding: "6px 10px", color: "#cbd5e1" }}
                 >
-                  Ketik <b>NOSIS</b> atau nama (min. 2 huruf), lalu pilih dari
-                  daftar.
+                  Ketik <b>NOSIS</b> atau nama, lalu pilih dari daftar.
                 </div>
 
                 {filtered.length === 0 ? (
@@ -214,16 +468,15 @@ export default function UploadPdf({ kind }) {
                         width: "100%",
                         textAlign: "left",
                         padding: "10px 12px",
-                        background: "#0f1424", // kartu item bukan hitam
+                        background: "#0f1424",
                         color: "#e5e7eb",
                         border: "1px solid #334155",
                         borderRadius: 10,
                         marginBottom: 8,
                         cursor: "pointer",
-                        transition: "background .15s, border-color .15s",
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.background = "#1f2937"; // hover lebih terang
+                        e.currentTarget.style.background = "#1f2937";
                         e.currentTarget.style.borderColor = "#475569";
                       }}
                       onMouseLeave={(e) => {
@@ -245,7 +498,6 @@ export default function UploadPdf({ kind }) {
             )}
           </div>
 
-          {/* Tanggal */}
           <div>
             <label className="muted">Tanggal</label>
             <input
@@ -257,7 +509,6 @@ export default function UploadPdf({ kind }) {
           </div>
         </div>
 
-        {/* Judul */}
         <div style={{ marginTop: 10 }}>
           <label className="muted">Judul</label>
           <input
@@ -268,7 +519,6 @@ export default function UploadPdf({ kind }) {
           />
         </div>
 
-        {/* File */}
         <div style={{ marginTop: 10 }}>
           <label className="muted">File PDF</label>
           <input
@@ -279,7 +529,6 @@ export default function UploadPdf({ kind }) {
           />
         </div>
 
-        {/* Info pilihan */}
         {selected?.id && (
           <div className="muted" style={{ marginTop: 8 }}>
             Akan diupload untuk: <b>{selected.nosis}</b> — {selected.nama} (ID:{" "}
@@ -287,25 +536,22 @@ export default function UploadPdf({ kind }) {
           </div>
         )}
 
-        {/* Pesan */}
-        {msg && (
-          <div
-            style={{
-              marginTop: 10,
-              color: msg.startsWith("Berhasil") ? "#86efac" : "#fca5a5",
-            }}
-          >
-            {msg}
-          </div>
-        )}
-
-        {/* Tombol */}
-        <div style={{ marginTop: 12 }}>
-          <button className="btn" disabled={loading} onClick={submit}>
-            {loading ? "Mengunggah..." : "Unggah"}
+        <div
+          style={{
+            marginTop: 12,
+            display: "flex",
+            gap: 8,
+            justifyContent: "flex-end",
+          }}
+        >
+          <button className="btn" onClick={() => setOpen(false)}>
+            Batal
+          </button>
+          <button className="btn" onClick={submit}>
+            Unggah
           </button>
         </div>
-      </div>
+      </Modal>
     </div>
   );
 }
