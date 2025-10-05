@@ -16,11 +16,21 @@ const riwayatRoutes = require("./routes/riwayat.routes");
 const exportRoutes = require("./routes/export.routes");
 const mentalRoutes = require("./routes/mental.routes");
 const makeDocsRoutes = require("./routes/docs.routes");
+const mapelRoutes = require("./routes/mapel.routes");
 
 const app = express();
 app.use(helmet());
 app.use(express.json());
-app.use(cors({ origin: true, credentials: true }));
+const corsOpts = {
+  origin: "http://localhost:5173", // atau true kalau multi-origin
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+  allowedHeaders: ["Authorization", "Content-Type", "Accept"],
+  exposedHeaders: ["Content-Disposition"],
+};
+app.use(cors(corsOpts));
+app.options("*", cors(corsOpts));
+// app.use(cors({ origin: true, credentials: true }));
 app.use(rateLimit({ windowMs: 60 * 1000, max: 60 }));
 
 app.use("/auth", authRoutes);
@@ -36,6 +46,7 @@ app.use("/export", exportRoutes);
 app.use("/mental", mentalRoutes);
 app.use("/bk", makeDocsRoutes("bk"));
 app.use("/pelanggaran", makeDocsRoutes("pelanggaran"));
+app.use("/mapel", mapelRoutes);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/health/db", async (_req, res) => {

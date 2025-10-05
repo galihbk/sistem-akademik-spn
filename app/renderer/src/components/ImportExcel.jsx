@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-// Peta reason code -> teks yang ramah
+// Peta reason code -> teks ramah
 const REASON_TEXT = {
   no_nosis: "Tidak ada NOSIS pada baris ini.",
   no_week_value: "Tidak ada nilai minggu apa pun pada baris ini.",
@@ -52,19 +52,10 @@ export default function ImportExcel({
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
         });
-        if (!res.ok) {
-          console.error(
-            "[ImportExcel] load angkatan:",
-            res.status,
-            await res.text()
-          );
-          return;
-        }
+        if (!res.ok) return;
         const data = await res.json(); // { items: [...] }
         if (alive) setAngkatanOpts(Array.isArray(data.items) ? data.items : []);
-      } catch (e) {
-        console.error("[ImportExcel] load angkatan error:", e);
-      }
+      } catch {}
     })();
     return () => {
       alive = false;
@@ -96,10 +87,23 @@ export default function ImportExcel({
       const form = new FormData();
       form.append("file", file);
 
-      const url = new URL(`${API}/import/${endpoint}`);
+      // ================== PERBAIKAN PENTING: Normalisasi endpoint ==================
+      // Menerima:
+      // - "http://.../path"   -> dipakai apa adanya
+      // - "/path"             -> digabung ke API (BASE_URL + path)
+      // - "relative-name"     -> default ke `${API}/import/${relative-name}`
+      let target;
+      if (/^https?:\/\//i.test(endpoint)) {
+        target = endpoint;
+      } else if (endpoint.startsWith("/")) {
+        target = `${API}${endpoint}`;
+      } else {
+        target = `${API}/import/${endpoint}`;
+      }
+      const url = new URL(target);
       if (dryRun) url.searchParams.set("dryRun", "true");
-      if (requireAngkatan && angkatan)
-        url.searchParams.set("angkatan", angkatan);
+      if (requireAngkatan && angkatan) url.searchParams.set("angkatan", angkatan);
+      // ============================================================================
 
       const res = await fetch(url.toString(), {
         method: "POST",
@@ -110,7 +114,8 @@ export default function ImportExcel({
       const data = await res.json();
 
       // Normalisasi bentuk payload detail -> detailLists
-      const detail = data?.detailLists ||
+      const detail =
+        data?.detailLists ||
         data?.detail || {
           ok: data?.okList || [],
           skip: data?.skipList || [],
@@ -146,7 +151,7 @@ export default function ImportExcel({
       const s = summarize(normalized);
       setLastImport({ mode: dryRun ? "dry" : "import", ...s });
 
-      // Callback sukses setelah import (non-dry-run)
+      // Callback ke parent
       const success = res.ok && !dryRun && !data?.error;
       if (!dryRun && typeof onAfterImport === "function") {
         onAfterImport({
@@ -179,7 +184,6 @@ export default function ImportExcel({
 
   return (
     <div className="grid" style={{ position: "relative" }}>
-      {/* OVERLAY LOADING */}
       {loading && <LoadingOverlay />}
 
       <div
@@ -197,26 +201,6 @@ export default function ImportExcel({
       </div>
 
       <div className="card">
-        {loading && (
-          <div
-            role="status"
-            aria-live="polite"
-            style={{
-              background: "#1b0c0c",
-              border: "1px solid #7f1d1d",
-              color: "#fca5a5",
-              padding: "8px 12px",
-              borderRadius: 8,
-              marginBottom: 12,
-              fontWeight: 600,
-            }}
-          >
-            ⏳ Import sedang diproses. <b>Jangan tutup / refresh halaman ini</b>{" "}
-            sampai proses selesai.
-          </div>
-        )}
-
-        {/* Badge ringkasan terakhir */}
         {lastImport && (
           <div
             style={{
@@ -323,7 +307,6 @@ export default function ImportExcel({
                     )}
                 </div>
 
-                {/* TAB HEADERS */}
                 <div
                   style={{
                     marginTop: 12,
@@ -355,7 +338,6 @@ export default function ImportExcel({
                   />
                 </div>
 
-                {/* TAB CONTENT */}
                 {activeTab && (
                   <div
                     className="card"

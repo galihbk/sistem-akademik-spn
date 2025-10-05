@@ -8,9 +8,9 @@ const fs = require("fs");
 const BASE_UPLOAD =
   process.env.UPLOAD_DIR || path.join(__dirname, "../../uploads");
 
-// storage dinamis: uploads/riwayat/YY/MM/
+// storage dinamis: uploads/riwayat/YYYY/MM/
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
+  destination: (_req, _file, cb) => {
     const now = new Date();
     const dir = path.join(
       BASE_UPLOAD,
@@ -29,15 +29,12 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// middleware kecil untuk menyimpan path relatif yg konsisten
+// simpan path relatif dari folder uploads/
 function rememberRelativePath(req, _res, next) {
   if (req.file) {
-    // simpan relative path dari folder uploads/
-    const abs = req.file.path;
-    const rel = abs
-      .split(path.join(BASE_UPLOAD, path.sep))
-      .pop()
-      .replace(/\\/g, "/");
+    const rel = path
+      .relative(BASE_UPLOAD, req.file.path)
+      .replace(/\\/g, "/"); // windows safe
     req.file.storedAs = rel.startsWith("uploads/")
       ? rel.replace(/^uploads\//, "")
       : rel;
@@ -45,10 +42,13 @@ function rememberRelativePath(req, _res, next) {
   next();
 }
 
-// POST /riwayat_kesehatan  (multipart: siswa_id, judul, deskripsi, tanggal, file(optional))
+// LIST
+router.get("/", ctrl.list);
+
+// CREATE (multipart)
 router.post("/", upload.single("file"), rememberRelativePath, ctrl.create);
 
-// DELETE /riwayat_kesehatan/:id  (hapus data + file fisik)
+// DELETE
 router.delete("/:id", ctrl.remove);
 
 module.exports = router;

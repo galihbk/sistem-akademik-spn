@@ -80,3 +80,48 @@ exports.remove = async (req, res) => {
     res.status(500).json({ ok: false, message: e.message });
   }
 };
+exports.list = async (req, res) => {
+  try {
+    const q = (req.query.q || "").trim().toLowerCase();
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 200);
+    const offset = (page - 1) * limit;
+
+    const params = [];
+    let where = "WHERE 1=1";
+    if (q) {
+      params.push(`%${q}%`);
+      where += ` AND (
+        LOWER(p.judul) LIKE $${params.length} OR
+        LOWER(COALESCE(p.tingkat,'')) LIKE $${params.length} OR
+        LOWER(s.nama) LIKE $${params.length} OR
+        LOWER(s.nosis) LIKE $${params.length}
+      )`;
+    }
+
+    const sqlData = `
+      SELECT
+        p.id, s.nosis, s.nama,
+        p.judul, p.tingkat, p.tanggal, p.file_path,
+        p.created_at
+      FROM prestasi p
+      JOIN siswa s ON s.id = p.siswa_id
+      ${where}
+      ORDER BY COALESCE(p.created_at, 'epoch'::timestamp) DESC, p.id DESC
+      LIMIT ${limit} OFFSET ${offset};
+    `;
+    const sqlCount = `
+      SELECT COUNT(*)::int AS total
+      FROM prestasi p
+      JOIN siswa s ON s.id = p.siswa_id
+      ${where};
+    `;
+
+    const [data, count] = await Promise.all([pool.query(sqlData, params), pool.query(sqlCount, params)]);
+    res.json({ items: data.rows, total: count.rows[0].total, page, limit });
+  } catch (e) {
+    console.error("[prestasi.list]", e);
+    res.status(500).json({ message: "Gagal mengambil data prestasi" });
+  }
+};
+

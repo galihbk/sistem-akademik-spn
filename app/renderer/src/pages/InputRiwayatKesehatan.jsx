@@ -3,15 +3,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-/* ---------- Utils ---------- */
+/* ===== Utils ===== */
 function buildDownloadUrl(filePath) {
   if (!filePath) return "#";
-  const clean = String(filePath)
-    .replace(/^\/+/, "")
-    .replace(/^uploads\//i, "");
+  const clean = String(filePath).replace(/^\/+/, "").replace(/^uploads\//i, "");
   return `${API}/download?path=${encodeURIComponent(clean)}`;
 }
-async function tryHead(url) {
+async function headOK(url) {
   try {
     const r = await fetch(url, { method: "HEAD" });
     return r.ok;
@@ -23,8 +21,7 @@ function fmtDate(v) {
   if (!v) return "-";
   try {
     const d = new Date(v);
-    if (Number.isNaN(+d)) return String(v);
-    return d.toLocaleDateString("id-ID");
+    return Number.isNaN(+d) ? String(v) : d.toLocaleDateString("id-ID");
   } catch {
     return String(v);
   }
@@ -36,7 +33,7 @@ const norm = (s) =>
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, "");
 
-/* ---------- Reusable Modal ---------- */
+/* ===== Modal ===== */
 function Modal({ open, onClose, title, children }) {
   if (!open) return null;
   return (
@@ -47,18 +44,18 @@ function Modal({ open, onClose, title, children }) {
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(3,6,17,0.66)",
+        background: "rgba(3,6,17,.66)",
         backdropFilter: "blur(2px)",
         display: "grid",
         placeItems: "center",
-        zIndex: 1000,
         padding: 16,
+        zIndex: 1000,
       }}
     >
       <div
         onMouseDown={(e) => e.stopPropagation()}
         style={{
-          width: "min(960px, 96vw)",
+          width: "min(960px,96vw)",
           maxHeight: "86vh",
           overflow: "auto",
           background: "#0b1220",
@@ -87,14 +84,14 @@ function Modal({ open, onClose, title, children }) {
   );
 }
 
-/* ---------- Halaman ---------- */
+/* ===== Page ===== */
 export default function InputRiwayatKesehatan() {
-  /* ====== HISTORY LIST ====== */
-  const [items, setItems] = useState([]);
+  /* ---------- History List ---------- */
+  const [list, setList] = useState([]);
   const [total, setTotal] = useState(0);
   const [qHist, setQHist] = useState("");
   const [page, setPage] = useState(1);
-  const [limit] = useState(20);
+  const limit = 20;
   const [loadingList, setLoadingList] = useState(false);
   const [alert, setAlert] = useState({ type: "", text: "" }); // success | danger
 
@@ -105,7 +102,7 @@ export default function InputRiwayatKesehatan() {
     u.searchParams.set("limit", String(limit));
     u.searchParams.set("sort_dir", "desc");
     return u.toString();
-  }, [qHist, page, limit]);
+  }, [qHist, page]);
 
   useEffect(() => {
     let alive = true;
@@ -118,11 +115,11 @@ export default function InputRiwayatKesehatan() {
         });
         const data = await r.json().catch(() => ({}));
         if (!alive) return;
-        setItems(Array.isArray(data.items) ? data.items : []);
+        setList(Array.isArray(data.items) ? data.items : []);
         setTotal(data.total ?? 0);
       } catch {
         if (!alive) return;
-        setItems([]);
+        setList([]);
         setTotal(0);
       } finally {
         if (!alive) return;
@@ -134,10 +131,9 @@ export default function InputRiwayatKesehatan() {
     };
   }, [listUrl]);
 
-  /* ====== MODAL FORM ====== */
+  /* ---------- Modal Form ---------- */
   const [open, setOpen] = useState(false);
 
-  // form state
   const [siswaId, setSiswaId] = useState(null);
   const [query, setQuery] = useState("");
   const [judul, setJudul] = useState("");
@@ -148,29 +144,28 @@ export default function InputRiwayatKesehatan() {
   const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  // dropdown siswa
+  // autocomplete
   const [searching, setSearching] = useState(false);
   const [sug, setSug] = useState([]);
   const [openList, setOpenList] = useState(false);
   const inputRef = useRef(null);
   const listRef = useRef(null);
   const q = useMemo(() => query.trim(), [query]);
-  const filteredSug = useMemo(() => {
-    const n = norm(q);
-    return n.length < 2
-      ? []
-      : sug
-          .filter((s) => norm(s.nosis).includes(n) || norm(s.nama).includes(n))
-          .slice(0, 20);
-  }, [sug, q]);
 
-  // fetch siswa (debounced)
+  // fetch siswa (debounce)
   useEffect(() => {
     let stop = false;
-    if (q.length < 2 || siswaId) {
-      setSug([]);
+
+    if (siswaId) {
+      setOpenList(false);
       return;
     }
+    if (q.length < 2) {
+      setSug([]);
+      setOpenList(false);
+      return;
+    }
+
     const t = setTimeout(async () => {
       try {
         setSearching(true);
@@ -184,8 +179,9 @@ export default function InputRiwayatKesehatan() {
         });
         const data = await r.json().catch(() => ({}));
         if (stop) return;
+        const arr = Array.isArray(data.items) ? data.items : [];
         setSug(
-          (Array.isArray(data.items) ? data.items : []).map((s) => ({
+          arr.map((s) => ({
             id: s.id,
             nosis: s.nosis,
             nama: s.nama,
@@ -194,32 +190,53 @@ export default function InputRiwayatKesehatan() {
         );
         setOpenList(true);
       } catch {
-        if (!stop) setSug([]);
+        if (!stop) {
+          setSug([]);
+          setOpenList(true);
+        }
       } finally {
         if (!stop) setSearching(false);
       }
     }, 250);
+
     return () => {
       stop = true;
       clearTimeout(t);
     };
   }, [q, siswaId]);
 
+  // close dropdown on outside click / blur / Esc
   useEffect(() => {
     function onDocClick(e) {
       const inInput = inputRef.current?.contains?.(e.target);
       const inList = listRef.current?.contains?.(e.target);
       if (!inInput && !inList) setOpenList(false);
     }
+    function onKey(e) {
+      if (e.key === "Escape") setOpenList(false);
+    }
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
   }, []);
+
+  const filteredSug = useMemo(() => {
+    const n = norm(q);
+    if (n.length < 2) return [];
+    return sug
+      .filter((s) => norm(s.nosis).includes(n) || norm(s.nama).includes(n))
+      .slice(0, 20);
+  }, [sug, q]);
 
   function pickSiswa(s) {
     setSiswaId(s.id);
     setQuery(`${String(s.nosis || "").padStart(4, "0")} — ${s.nama}`);
     setOpenList(false);
   }
+
   function resetForm() {
     setSiswaId(null);
     setQuery("");
@@ -231,15 +248,26 @@ export default function InputRiwayatKesehatan() {
     if (el) el.value = "";
   }
 
+  // ⬇⬇ helper untuk menutup modal & merapikan state
+  function closeModalAndReset() {
+    setOpen(false);
+    setOpenList(false);
+    resetForm();
+  }
+
   async function submit() {
     setAlert({ type: "", text: "" });
+
     if (!siswaId || !judul.trim() || !deskripsi.trim()) {
       setAlert({
         type: "danger",
         text: "Lengkapi siswa, Judul, dan Deskripsi.",
       });
+      // gagal validasi → juga tutup modal (sesuai permintaan)
+      closeModalAndReset();
       return;
     }
+
     try {
       setSaving(true);
       const token = await window.authAPI?.getToken?.();
@@ -251,28 +279,20 @@ export default function InputRiwayatKesehatan() {
       form.append("tanggal", tanggal || "");
       if (file) form.append("file", file);
 
-      const res = await fetch(`${API}/riwayat_kesehatan`, {
+      const r = await fetch(`${API}/riwayat_kesehatan`, {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || "Gagal menyimpan data.");
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.message || "Gagal menyimpan data.");
 
-      setAlert({
-        type: "success",
-        text: "Berhasil disimpan.",
-      });
-      // refresh list
-      setPage(1);
-      // pertahankan pilihan siswa agar bisa input beruntun
-      setJudul("");
-      setDeskripsi("");
-      setFile(null);
-      const el = document.getElementById("rkFileInput");
-      if (el) el.value = "";
+      setAlert({ type: "success", text: "Berhasil disimpan." });
+      setPage(1); // refresh list dari halaman 1
+      closeModalAndReset(); // ⬅ AUTOCLOSE saat sukses
     } catch (e) {
       setAlert({ type: "danger", text: `Gagal: ${e.message}` });
+      closeModalAndReset(); // ⬅ AUTOCLOSE saat error
     } finally {
       setSaving(false);
     }
@@ -284,11 +304,7 @@ export default function InputRiwayatKesehatan() {
       {/* Header + open modal */}
       <div
         className="card"
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
       >
         <div>
           <div style={{ fontWeight: 800, fontSize: 18 }}>Riwayat Kesehatan</div>
@@ -304,9 +320,7 @@ export default function InputRiwayatKesehatan() {
         <div
           className="card"
           style={{
-            border: `1px solid ${
-              alert.type === "success" ? "#166534" : "#7f1d1d"
-            }`,
+            border: `1px solid ${alert.type === "success" ? "#166534" : "#7f1d1d"}`,
             background: alert.type === "success" ? "#052e1a" : "#1b0c0c",
             color: alert.type === "success" ? "#86efac" : "#fca5a5",
             padding: "8px 12px",
@@ -318,10 +332,7 @@ export default function InputRiwayatKesehatan() {
       )}
 
       {/* Toolbar list */}
-      <div
-        className="card"
-        style={{ display: "flex", gap: 8, alignItems: "center" }}
-      >
+      <div className="card" style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input
           className="input"
           placeholder="Cari judul / nama / nosis …"
@@ -332,26 +343,14 @@ export default function InputRiwayatKesehatan() {
           }}
           style={{ minWidth: 280 }}
         />
-        <div style={{ marginLeft: "auto", color: "#94a3b8" }}>
-          Total: {total}
-        </div>
+        <div style={{ marginLeft: "auto", color: "#94a3b8" }}>Total: {total}</div>
       </div>
 
       {/* Tabel history */}
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <div
-          className="table-wrap"
-          style={{ maxHeight: "60vh", overflow: "auto" }}
-        >
+        <div className="table-wrap" style={{ maxHeight: "60vh", overflow: "auto" }}>
           <table className="table" style={{ width: "100%" }}>
-            <thead
-              style={{
-                position: "sticky",
-                top: 0,
-                background: "#0b1220",
-                zIndex: 1,
-              }}
-            >
+            <thead style={{ position: "sticky", top: 0, background: "#0b1220", zIndex: 1 }}>
               <tr>
                 <th style={{ textAlign: "left" }}>NOSIS</th>
                 <th style={{ textAlign: "left" }}>Nama</th>
@@ -368,21 +367,19 @@ export default function InputRiwayatKesehatan() {
                     Memuat…
                   </td>
                 </tr>
-              ) : items.length === 0 ? (
+              ) : list.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="muted" style={{ padding: 12 }}>
                     Tidak ada data.
                   </td>
                 </tr>
               ) : (
-                items.map((r) => (
+                list.map((r) => (
                   <tr key={r.id}>
                     <td style={{ whiteSpace: "nowrap" }}>{r.nosis ?? "-"}</td>
                     <td style={{ whiteSpace: "nowrap" }}>{r.nama ?? "-"}</td>
                     <td>{r.judul ?? "-"}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      {fmtDate(r.tanggal)}
-                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>{fmtDate(r.tanggal)}</td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       {r.file_path ? (
                         <button
@@ -390,11 +387,8 @@ export default function InputRiwayatKesehatan() {
                           style={{ padding: "6px 10px" }}
                           onClick={async () => {
                             const url = buildDownloadUrl(r.file_path);
-                            if (!(await tryHead(url))) {
-                              setAlert({
-                                type: "danger",
-                                text: "File tidak ditemukan.",
-                              });
+                            if (!(await headOK(url))) {
+                              setAlert({ type: "danger", text: "File tidak ditemukan." });
                               return;
                             }
                             if (window.electronAPI?.download) {
@@ -415,9 +409,7 @@ export default function InputRiwayatKesehatan() {
                         "-"
                       )}
                     </td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      {fmtDate(r.created_at)}
-                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>{fmtDate(r.created_at)}</td>
                   </tr>
                 ))
               )}
@@ -428,18 +420,14 @@ export default function InputRiwayatKesehatan() {
 
       {/* Pagination */}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <button
-          className="btn"
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
-          disabled={page <= 1}
-        >
+        <button className="btn" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
           Prev
         </button>
         <span className="badge">Page {page}</span>
         <button
           className="btn"
           onClick={() => setPage((p) => p + 1)}
-          disabled={items.length < limit}
+          disabled={list.length < limit}
         >
           Next
         </button>
@@ -448,7 +436,10 @@ export default function InputRiwayatKesehatan() {
       {/* Modal Form */}
       <Modal
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => {
+          setOpen(false);
+          setOpenList(false);
+        }}
         title="Input Riwayat Kesehatan"
       >
         {/* Cari siswa + tanggal */}
@@ -460,18 +451,21 @@ export default function InputRiwayatKesehatan() {
               placeholder="Ketik min. 2 huruf lalu pilih dari daftar"
               value={query}
               onChange={(e) => {
-                setQuery(e.target.value);
-                setSiswaId(null);
+                const v = e.target.value;
+                setQuery(v);
+                if (siswaId) setSiswaId(null);
               }}
-              onFocus={() => q.length >= 2 && setOpenList(true)}
+              onFocus={() => {
+                if (!siswaId && q.length >= 2) setOpenList(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setOpenList(false);
+              }}
               autoComplete="off"
             />
-            {siswaId && (
-              <div className="muted" style={{ marginTop: 6 }}>
-                Siswa terpilih. Klik “Ganti” untuk memilih ulang.
-              </div>
-            )}
-            {openList && (
+
+            {/* Dropdown – muncul hanya saat belum memilih siswa */}
+            {openList && !siswaId && (
               <div
                 ref={listRef}
                 style={{
@@ -500,14 +494,10 @@ export default function InputRiwayatKesehatan() {
                 >
                   {searching ? "Mencari..." : "Pilih dari daftar:"}
                 </div>
+
                 {filteredSug.length === 0 ? (
-                  <div
-                    className="muted"
-                    style={{ padding: 10, color: "#cbd5e1" }}
-                  >
-                    {q.length < 2
-                      ? "Ketik minimal 2 karakter."
-                      : "Tidak ada hasil."}
+                  <div className="muted" style={{ padding: 10, color: "#cbd5e1" }}>
+                    {q.length < 2 ? "Ketik minimal 2 karakter." : "Tidak ada hasil."}
                   </div>
                 ) : (
                   filteredSug.map((s) => (
@@ -515,6 +505,7 @@ export default function InputRiwayatKesehatan() {
                       key={s.id}
                       type="button"
                       onClick={() => pickSiswa(s)}
+                      onMouseDown={(e) => e.preventDefault()}
                       style={{
                         width: "100%",
                         textAlign: "left",
@@ -525,36 +516,19 @@ export default function InputRiwayatKesehatan() {
                         cursor: "pointer",
                         color: "#e5e7eb",
                       }}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onMouseEnter={(e) =>
-                        (e.currentTarget.style.background = "#2b3a55")
-                      }
-                      onMouseLeave={(e) =>
-                        (e.currentTarget.style.background = "#1f2a3a")
-                      }
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "#2b3a55")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "#1f2a3a")}
                     >
                       <div style={{ fontWeight: 700 }}>
                         {String(s.nosis || "-").padStart(4, "0")} — {s.nama}
                       </div>
-                      <div
-                        className="muted"
-                        style={{ fontSize: 12, color: "#cbd5e1" }}
-                      >
+                      <div className="muted" style={{ fontSize: 12, color: "#cbd5e1" }}>
                         {s.nik ? `NIK ${s.nik}` : "NIK -"}
                       </div>
                     </button>
                   ))
                 )}
               </div>
-            )}
-            {siswaId && (
-              <button
-                className="btn"
-                style={{ marginTop: 8, padding: "4px 8px" }}
-                onClick={resetForm}
-              >
-                Ganti
-              </button>
             )}
           </div>
 

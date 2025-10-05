@@ -67,3 +67,74 @@ exports.remove = async (req, res) => {
     res.status(500).json({ ok: false, message: e.message });
   }
 };
+exports.list = async (req, res) => {
+  try {
+    const q = (req.query.q || "").trim().toLowerCase();
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100);
+    const offset = (page - 1) * limit;
+
+    const sortBy = ["created_at", "tanggal"].includes((req.query.sort_by || "").toLowerCase())
+      ? req.query.sort_by.toLowerCase()
+      : "created_at";
+    const sortDir = ["asc", "desc"].includes((req.query.sort_dir || "").toLowerCase())
+      ? req.query.sort_dir.toLowerCase()
+      : "desc";
+
+    const params = [];
+    let where = "WHERE 1=1";
+    if (q) {
+      params.push(`%${q}%`);
+      params.push(`%${q}%`);
+      params.push(`%${q}%`);
+      where += `
+        AND (
+          LOWER(r.judul) LIKE $${params.length - 2}
+          OR LOWER(s.nama) LIKE $${params.length - 1}
+          OR LOWER(s.nosis) LIKE $${params.length}
+        )`;
+    }
+
+    const sqlData = `
+      SELECT
+        r.id,
+        r.siswa_id,
+        s.nosis,
+        s.nama,
+        r.judul,
+        r.deskripsi,
+        r.tanggal,
+        r.file_path,
+        r.created_at
+      FROM riwayat_kesehatan r
+      JOIN siswa s ON s.id = r.siswa_id
+      ${where}
+      ORDER BY ${sortBy} ${sortDir}, r.id DESC
+      LIMIT ${limit} OFFSET ${offset};
+    `;
+    const sqlCount = `
+      SELECT COUNT(*)::int AS total
+      FROM riwayat_kesehatan r
+      JOIN siswa s ON s.id = r.siswa_id
+      ${where};
+    `;
+
+    const [data, count] = await Promise.all([
+      pool.query(sqlData, params),
+      pool.query(sqlCount, params),
+    ]);
+
+    res.json({
+      items: data.rows,
+      total: count.rows[0].total,
+      page,
+      limit,
+      sort_by: sortBy,
+      sort_dir: sortDir,
+      q,
+    });
+  } catch (e) {
+    console.error("[riwayat.list]", e);
+    res.status(500).json({ ok: false, message: "Gagal mengambil data" });
+  }
+};

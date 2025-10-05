@@ -29,6 +29,12 @@ function fmtDate(v) {
     return String(v);
   }
 }
+function closeAfter(ms = 900) {
+  setTimeout(() => {
+    setOpen(false);
+    setOpenList(false);
+  }, ms);
+}
 const norm = (s) =>
   String(s || "")
     .toLowerCase()
@@ -100,8 +106,9 @@ export default function InputPrestasi() {
 
   /* ---------- state: modal form ---------- */
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [selectedSiswa, setSelectedSiswa] = useState(null); // {id, nosis, nama, nik}
+
+  const [siswaId, setSiswaId] = useState(null);     // << sama seperti Riwayat (pakai ID saja)
+  const [query, setQuery] = useState("");           // tampilan teks (NOSIS — Nama)
   const [judul, setJudul] = useState("");
   const [tingkat, setTingkat] = useState("");
   const [deskripsi, setDeskripsi] = useState("");
@@ -111,20 +118,20 @@ export default function InputPrestasi() {
   const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  // dropdown siswa
+  // dropdown siswa (autocomplete)
   const [searching, setSearching] = useState(false);
   const [sug, setSug] = useState([]);
   const [openList, setOpenList] = useState(false);
   const inputRef = useRef(null);
   const listRef = useRef(null);
   const q = useMemo(() => query.trim(), [query]);
+
   const filteredSug = useMemo(() => {
     const n = norm(q);
-    return n.length < 2
-      ? []
-      : sug
-          .filter((s) => norm(s.nosis).includes(n) || norm(s.nama).includes(n))
-          .slice(0, 20);
+    if (n.length < 2) return [];
+    return (sug || [])
+      .filter((s) => norm(s.nosis).includes(n) || norm(s.nama).includes(n))
+      .slice(0, 20);
   }, [sug, q]);
 
   /* ---------- fetch history ---------- */
@@ -164,14 +171,22 @@ export default function InputPrestasi() {
     };
   }, [listUrl]);
 
-  /* ---------- search siswa (modal) ---------- */
+  /* ---------- search siswa (modal) — sama seperti Riwayat ---------- */
   useEffect(() => {
     let stop = false;
-    if (q.length < 2) {
-      setSug([]);
+
+    if (siswaId) {
+      // Sudah memilih siswa ⇒ jangan tampilkan dropdown lagi
+      setOpenList(false);
       return;
     }
-    (async () => {
+    if (q.length < 2) {
+      setSug([]);
+      setOpenList(false);
+      return;
+    }
+
+    const t = setTimeout(async () => {
       try {
         setSearching(true);
         const token = await window.authAPI?.getToken?.();
@@ -194,34 +209,48 @@ export default function InputPrestasi() {
         );
         setOpenList(true);
       } catch {
-        if (!stop) setSug([]);
+        if (!stop) {
+          setSug([]);
+          setOpenList(true);
+        }
       } finally {
         if (!stop) setSearching(false);
       }
-    })();
+    }, 250);
+
     return () => {
       stop = true;
+      clearTimeout(t);
     };
-  }, [q]);
+  }, [q, siswaId]);
 
+  // Tutup dropdown pada klik di luar / Esc — sama seperti Riwayat
   useEffect(() => {
     function onDocClick(e) {
       const inInput = inputRef.current?.contains?.(e.target);
       const inList = listRef.current?.contains?.(e.target);
       if (!inInput && !inList) setOpenList(false);
     }
+    function onKey(e) {
+      if (e.key === "Escape") setOpenList(false);
+    }
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
   }, []);
 
   function pickSiswa(s) {
-    setSelectedSiswa(s);
-    setQuery(`${s.nosis} — ${s.nama}`);
+    setSiswaId(s.id);
+    setQuery(`${String(s.nosis || "").padStart(4, "0")} — ${s.nama}`);
     setOpenList(false);
   }
+
   function clearForm() {
+    setSiswaId(null);
     setQuery("");
-    setSelectedSiswa(null);
     setJudul("");
     setTingkat("");
     setDeskripsi("");
@@ -234,11 +263,8 @@ export default function InputPrestasi() {
   /* ---------- submit ---------- */
   async function submit() {
     setAlert({ type: "", text: "" });
-    if (!selectedSiswa?.id) {
-      setAlert({
-        type: "danger",
-        text: "Pilih siswa dari daftar terlebih dahulu.",
-      });
+    if (!siswaId) {
+      setAlert({ type: "danger", text: "Pilih siswa dari daftar terlebih dahulu." });
       return;
     }
     if (!judul.trim()) {
@@ -253,7 +279,7 @@ export default function InputPrestasi() {
       setSaving(true);
       const token = await window.authAPI?.getToken?.();
       const form = new FormData();
-      form.append("siswa_id", String(selectedSiswa.id));
+      form.append("siswa_id", String(siswaId));
       form.append("judul", judul.trim());
       form.append("tingkat", tingkat.trim());
       form.append("deskripsi", deskripsi.trim());
@@ -268,13 +294,10 @@ export default function InputPrestasi() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Gagal menyimpan prestasi");
 
-      setAlert({
-        type: "success",
-        text: `Berhasil disimpan untuk ${selectedSiswa.nosis} — ${selectedSiswa.nama}.`,
-      });
-      // refresh list
+      setAlert({ type: "success", text: "Berhasil disimpan." });
+      // refresh list dari page 1
       setPage(1);
-      // biarkan modal tetap terbuka; reset field selain siswa
+      // tetap di modal; kosongkan field selain siswa agar input beruntun
       setJudul("");
       setTingkat("");
       setDeskripsi("");
@@ -286,6 +309,11 @@ export default function InputPrestasi() {
     } finally {
       setSaving(false);
     }
+    setAlert({ type: "success", text: "Berhasil disimpan." });
+setPage(1);
+setJudul(""); setTingkat(""); setDeskripsi(""); setFile(null);
+const el = document.getElementById("prestasiFileInput"); if (el) el.value = "";
+closeAfter();
   }
 
   /* ---------- UI ---------- */
@@ -294,17 +322,11 @@ export default function InputPrestasi() {
       {/* Header + button */}
       <div
         className="card"
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
       >
         <div>
           <div style={{ fontWeight: 800, fontSize: 18 }}>Input Prestasi</div>
-          <div className="muted">
-            Catat prestasi per-siswa, lampiran opsional.
-          </div>
+          <div className="muted">Catat prestasi per-siswa, lampiran opsional.</div>
         </div>
         <button className="btn" onClick={() => setOpen(true)}>
           + Input Prestasi
@@ -316,9 +338,7 @@ export default function InputPrestasi() {
         <div
           className="card"
           style={{
-            border: `1px solid ${
-              alert.type === "success" ? "#166534" : "#7f1d1d"
-            }`,
+            border: `1px solid ${alert.type === "success" ? "#166534" : "#7f1d1d"}`,
             background: alert.type === "success" ? "#052e1a" : "#1b0c0c",
             color: alert.type === "success" ? "#86efac" : "#fca5a5",
             padding: "8px 12px",
@@ -330,10 +350,7 @@ export default function InputPrestasi() {
       )}
 
       {/* Toolbar kecil list */}
-      <div
-        className="card"
-        style={{ display: "flex", gap: 8, alignItems: "center" }}
-      >
+      <div className="card" style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input
           className="input"
           placeholder="Cari judul / nama / nosis …"
@@ -344,26 +361,14 @@ export default function InputPrestasi() {
           }}
           style={{ minWidth: 280 }}
         />
-        <div style={{ marginLeft: "auto", color: "#94a3b8" }}>
-          Total: {total}
-        </div>
+        <div style={{ marginLeft: "auto", color: "#94a3b8" }}>Total: {total}</div>
       </div>
 
       {/* Tabel history */}
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <div
-          className="table-wrap"
-          style={{ maxHeight: "60vh", overflow: "auto" }}
-        >
+        <div className="table-wrap" style={{ maxHeight: "60vh", overflow: "auto" }}>
           <table className="table" style={{ width: "100%" }}>
-            <thead
-              style={{
-                position: "sticky",
-                top: 0,
-                background: "#0b1220",
-                zIndex: 1,
-              }}
-            >
+            <thead style={{ position: "sticky", top: 0, background: "#0b1220", zIndex: 1 }}>
               <tr>
                 <th style={{ textAlign: "left" }}>NOSIS</th>
                 <th style={{ textAlign: "left" }}>Nama</th>
@@ -394,9 +399,7 @@ export default function InputPrestasi() {
                     <td style={{ whiteSpace: "nowrap" }}>{r.nama ?? "-"}</td>
                     <td>{r.judul ?? "-"}</td>
                     <td style={{ whiteSpace: "nowrap" }}>{r.tingkat ?? "-"}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      {fmtDate(r.tanggal)}
-                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>{fmtDate(r.tanggal)}</td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       {r.file_path ? (
                         <button
@@ -405,10 +408,7 @@ export default function InputPrestasi() {
                           onClick={async () => {
                             const url = buildDownloadUrl(r.file_path);
                             if (!(await tryHead(url))) {
-                              setAlert({
-                                type: "danger",
-                                text: "File tidak ditemukan.",
-                              });
+                              setAlert({ type: "danger", text: "File tidak ditemukan." });
                               return;
                             }
                             if (window.electronAPI?.download) {
@@ -429,9 +429,7 @@ export default function InputPrestasi() {
                         "-"
                       )}
                     </td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      {fmtDate(r.created_at)}
-                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>{fmtDate(r.created_at)}</td>
                   </tr>
                 ))
               )}
@@ -460,7 +458,14 @@ export default function InputPrestasi() {
       </div>
 
       {/* Modal Form */}
-      <Modal open={open} onClose={() => setOpen(false)} title="Input Prestasi">
+      <Modal
+        open={open}
+        onClose={() => {
+          setOpen(false);
+          setOpenList(false); // ⬅ penting: tutup dropdown saat modal ditutup (persis seperti Riwayat)
+        }}
+        title="Input Prestasi"
+      >
         {/* Cari siswa + tanggal */}
         <div className="grid grid-2" style={{ gap: 12, position: "relative" }}>
           <div ref={inputRef} style={{ position: "relative" }}>
@@ -470,24 +475,23 @@ export default function InputPrestasi() {
               placeholder="Ketik min. 2 huruf lalu pilih dari daftar"
               value={query}
               onChange={(e) => {
-                setQuery(e.target.value);
-                setSelectedSiswa(null);
+                const v = e.target.value;
+                setQuery(v);
+                // saat user mengetik ulang, batalkan selection
+                if (siswaId) setSiswaId(null);
               }}
-              onFocus={() => q.length >= 2 && setOpenList(true)}
+              onFocus={() => {
+                // hanya buka dropdown kalau belum memilih siswa
+                if (!siswaId && q.length >= 2) setOpenList(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setOpenList(false);
+              }}
               autoComplete="off"
             />
-            {selectedSiswa && (
-              <div className="muted" style={{ marginTop: 6 }}>
-                Terpilih: <b>{selectedSiswa.nosis}</b> — {selectedSiswa.nama}{" "}
-                {selectedSiswa.nik ? (
-                  <span style={{ color: "#64748b" }}>
-                    (NIK {selectedSiswa.nik})
-                  </span>
-                ) : null}
-              </div>
-            )}
 
-            {openList && (
+            {/* Dropdown – hanya muncul saat BELUM memilih siswa */}
+            {openList && !siswaId && (
               <div
                 ref={listRef}
                 style={{
@@ -518,13 +522,8 @@ export default function InputPrestasi() {
                 </div>
 
                 {filteredSug.length === 0 ? (
-                  <div
-                    className="muted"
-                    style={{ padding: 10, color: "#cbd5e1" }}
-                  >
-                    {q.length < 2
-                      ? "Ketik minimal 2 karakter."
-                      : "Tidak ada hasil."}
+                  <div className="muted" style={{ padding: 10, color: "#cbd5e1" }}>
+                    {q.length < 2 ? "Ketik minimal 2 karakter." : "Tidak ada hasil."}
                   </div>
                 ) : (
                   filteredSug.map((s) => (
@@ -532,6 +531,7 @@ export default function InputPrestasi() {
                       key={s.id}
                       type="button"
                       onClick={() => pickSiswa(s)}
+                      onMouseDown={(e) => e.preventDefault()}
                       style={{
                         width: "100%",
                         textAlign: "left",
@@ -542,21 +542,13 @@ export default function InputPrestasi() {
                         cursor: "pointer",
                         color: "#e5e7eb",
                       }}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onMouseEnter={(e) =>
-                        (e.currentTarget.style.background = "#2b3a55")
-                      }
-                      onMouseLeave={(e) =>
-                        (e.currentTarget.style.background = "#1f2a3a")
-                      }
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "#2b3a55")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "#1f2a3a")}
                     >
                       <div style={{ fontWeight: 700 }}>
                         {String(s.nosis || "-").padStart(4, "0")} — {s.nama}
                       </div>
-                      <div
-                        className="muted"
-                        style={{ fontSize: 12, color: "#cbd5e1" }}
-                      >
+                      <div className="muted" style={{ fontSize: 12, color: "#cbd5e1" }}>
                         {s.nik ? `NIK ${s.nik}` : "NIK -"}
                       </div>
                     </button>

@@ -1,18 +1,17 @@
-// routes/prestasi.routes.js
 const router = require("express").Router();
+const ctrl = require("../controllers/prestasi.controller");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const ctrl = require("../controllers/prestasi.controller");
 
-// ====== FIX: base uploads di server/uploads (bukan server/src/uploads)
-const UPLOAD_BASE = path.resolve(__dirname, "..", "..", "uploads");
+const BASE_UPLOAD = process.env.UPLOAD_DIR || path.join(__dirname, "../../uploads");
 
+// simpan ke uploads/prestasi/YYYY/MM/
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
+  destination: (_req, _file, cb) => {
     const now = new Date();
-    const dir = path.resolve(
-      UPLOAD_BASE,
+    const dir = path.join(
+      BASE_UPLOAD,
       "prestasi",
       String(now.getFullYear()),
       String(now.getMonth() + 1).padStart(2, "0")
@@ -20,17 +19,33 @@ const storage = multer.diskStorage({
     fs.mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
-  filename: (req, file, cb) => {
-    const safe = (file.originalname || "file")
-      .replace(/[^a-zA-Z0-9.\-_]+/g, "_")
-      .slice(-120);
-    cb(null, `${Date.now()}_${safe}`);
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || "").slice(0, 10) || "";
+    cb(null, `PRS_${Date.now()}${ext}`);
   },
 });
+const upload = multer({ storage });
 
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
+// set path relatif dari folder uploads/
+function rememberRelativePath(req, _res, next) {
+  if (req.file) {
+    const abs = req.file.path;
+    const rel = abs
+      .split(path.join(BASE_UPLOAD, path.sep))
+      .pop()
+      .replace(/\\/g, "/");
+    req.file.storedAs = rel.startsWith("uploads/") ? rel.replace(/^uploads\//, "") : rel;
+  }
+  next();
+}
 
-router.post("/", upload.single("file"), ctrl.create);
+// LIST
+router.get("/", ctrl.list);
+
+// CREATE
+router.post("/", upload.single("file"), rememberRelativePath, ctrl.create);
+
+// DELETE
 router.delete("/:id", ctrl.remove);
 
 module.exports = router;
