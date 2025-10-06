@@ -16,7 +16,6 @@ export default function ImportPage() {
     { key: "mental", label: "Mental Kepribadian", disabled: true },
     { key: "bk", label: "Bimbingan Konseling (BK)", disabled: true },
     { key: "pelanggaran", label: "Pelanggaran", disabled: true },
-    { key: "mapel", label: "Nilai Mapel", disabled: true },
     { key: "prestasi", label: "Prestasi", disabled: true },
     { key: "jasmani", label: "Jasmani", disabled: true },
     { key: "riwayat_kesehatan", label: "Riwayat Kesehatan", disabled: true },
@@ -25,7 +24,7 @@ export default function ImportPage() {
   const pickOption = (opt) => {
     if (opt.disabled) return;
     setImportType(opt.key);
-    setResult(null);   // clear hasil lama tiap ganti tipe
+    setResult(null); // clear hasil lama tiap ganti tipe
     setFile(null);
   };
 
@@ -64,10 +63,18 @@ export default function ImportPage() {
   return (
     <div className="grid">
       <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
           <div>
             <div style={{ fontWeight: 800, fontSize: 18 }}>Import</div>
-            <div style={{ color: "#94a3b8" }}>Pilih jenis data yang akan di-import</div>
+            <div style={{ color: "#94a3b8" }}>
+              Pilih jenis data yang akan di-import
+            </div>
           </div>
         </div>
 
@@ -96,16 +103,31 @@ export default function ImportPage() {
             <div style={{ fontWeight: 700, marginBottom: 8 }}>
               {options.find((o) => o.key === importType)?.label}
             </div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
               <input
                 type="file"
                 onChange={(e) => setFile(e.target.files[0])}
                 accept=".xlsx,.xls"
               />
-              <button className="btn" onClick={() => requestImport(true)} disabled={!file || loading}>
+              <button
+                className="btn"
+                onClick={() => requestImport(true)}
+                disabled={!file || loading}
+              >
                 Cek (Dry Run)
               </button>
-              <button className="btn" onClick={() => requestImport(false)} disabled={!file || loading}>
+              <button
+                className="btn"
+                onClick={() => requestImport(false)}
+                disabled={!file || loading}
+              >
                 Mulai Import
               </button>
             </div>
@@ -114,21 +136,40 @@ export default function ImportPage() {
             {result && (
               <div style={{ marginTop: 12 }}>
                 {"error" in result ? (
-                  <div style={{ color: "#fca5a5" }}>⚠ {result.error || result.message}</div>
+                  <div style={{ color: "#fca5a5" }}>
+                    ⚠ {result.error || result.message}
+                  </div>
                 ) : (
                   <>
                     <div style={{ color: "#94a3b8" }}>
-                      Sheet: <b>{result.sheetUsed}</b> · Rows: <b>{result.rows}</b> · Header row:{" "}
+                      Sheet: <b>{result.sheetUsed}</b> · Rows:{" "}
+                      <b>{result.rows}</b> · Header row:{" "}
                       <b>{result.headerRow}</b>
                     </div>
-                    <div style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
-                      <span className="badge clickable" onClick={() => openModal("ok")}>
+                    <div
+                      style={{
+                        marginTop: 8,
+                        display: "flex",
+                        gap: 12,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <span
+                        className="badge clickable"
+                        onClick={() => openModal("ok")}
+                      >
                         OK: {result.ok}
                       </span>
-                      <span className="badge clickable" onClick={() => openModal("skip")}>
+                      <span
+                        className="badge clickable"
+                        onClick={() => openModal("skip")}
+                      >
                         Skip: {result.skip}
                       </span>
-                      <span className="badge clickable" onClick={() => openModal("fail")}>
+                      <span
+                        className="badge clickable"
+                        onClick={() => openModal("fail")}
+                      >
                         Fail: {result.fail}
                       </span>
                     </div>
@@ -142,13 +183,25 @@ export default function ImportPage() {
 
       {/* Modal detail OK / Skip / Fail */}
       {modal.open && (
-        <div className="modal" onClick={() => setModal({ open: false, type: null, list: [] })}>
+        <div
+          className="modal"
+          onClick={() => setModal({ open: false, type: null, list: [] })}
+        >
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
               <div style={{ fontWeight: 800 }}>
                 Detail {modal.type?.toUpperCase()} ({modal.list.length})
               </div>
-              <button className="btn" onClick={() => setModal({ open: false, type: null, list: [] })}>
+              <button
+                className="btn"
+                onClick={() => setModal({ open: false, type: null, list: [] })}
+              >
                 Tutup
               </button>
             </div>

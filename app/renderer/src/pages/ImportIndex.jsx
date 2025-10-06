@@ -15,11 +15,6 @@ export default function ImportIndex() {
       hash: "#/import/mental",
     },
     {
-      key: "mapel",
-      label: "Import Nilai Mapel (Excel)",
-      hash: "#/import/mapel",
-    },
-    {
       key: "jasmani",
       label: "Import Jasmani (Excel)",
       hash: "#/import/jasmani",

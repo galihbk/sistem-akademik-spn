@@ -11,7 +11,6 @@ import SiswaDetail from "./pages/SiswaDetail";
 // Import/Upload/Input pages
 import ImportIndex from "./pages/ImportIndex"; // boleh tetap ada, tapi tak dipakai di nav
 import ImportSiswa from "./pages/ImportSiswa";
-import ImportSosiometri from "./pages/ImportSosiometri";
 import ImportMental from "./pages/ImportMental";
 import ImportMapel from "./pages/ImportMapel";
 import ImportJasmani from "./pages/ImportJasmani";
@@ -119,8 +118,6 @@ function parseHash() {
   // import index & masing-masing jenis
   if (seg[0] === "import" && !seg[1]) return { name: "importIndex" };
   if (seg[0] === "import" && seg[1] === "siswa") return { name: "importSiswa" };
-  if (seg[0] === "import" && seg[1] === "sosiometri")
-    return { name: "importSosiometri" };
   if (seg[0] === "import" && seg[1] === "mental")
     return { name: "importMental" };
   if (seg[0] === "import" && seg[1] === "mapel") return { name: "importMapel" };
