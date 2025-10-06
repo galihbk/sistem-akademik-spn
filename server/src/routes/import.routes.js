@@ -32,16 +32,4 @@ router.post("/siswa", requireAuth, upload.single("file"), importSiswa);
 // Import Mental (Excel, sheet MK)
 router.post("/mental", requireAuth, upload.single("file"), importMental);
 
-// (Optional) Placeholder untuk yang lain biar gak error:
-router.post(
-  "/:type(sosiometri|mapel|jasmani)",
-  requireAuth,
-  upload.single("file"),
-  (req, res) => {
-    return res
-      .status(501)
-      .json({ message: `Import ${req.params.type} belum diimplementasikan.` });
-  }
-);
-
 module.exports = router;
