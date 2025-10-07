@@ -158,7 +158,7 @@ export default function App() {
   const nav = useMemo(
     () => [
       { key: "dashboard", label: "Dashboard", href: "#/dashboard", icon: "🏠" },
-      { key: "siswa", label: "Siswa", href: "#/siswa", icon: "👥" },
+      // { key: "siswa", label: "Siswa", href: "#/siswa", icon: "👥" },
       {
         key: "import",
         label: "Data",
@@ -225,10 +225,10 @@ export default function App() {
     title = "Dashboard";
     active = "dashboard";
     content = <Dashboard />;
-  } else if (route.name === "siswa") {
-    title = "Siswa";
-    active = "siswa";
-    content = <Siswa />;
+    // } else if (route.name === "siswa") {
+    //   title = "Siswa";
+    //   active = "siswa";
+    //   content = <Siswa />;
   } else if (route.name === "siswaDetail") {
     title = "Detail Siswa";
     active = "siswa";

@@ -427,10 +427,10 @@ export default function Dashboard() {
         <div className="card">
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Quick Actions</div>
           <div className="grid">
-            <a className="btn" href="#/import">
+            {/* <a className="btn" href="#/import">
               Buka Halaman Import
-            </a>
-            <a className="btn" href="#/siswa">
+            </a> */}
+            <a className="btn" href="#/import/siswa">
               Cari Siswa
             </a>
           </div>

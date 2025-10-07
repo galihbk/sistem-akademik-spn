@@ -106,8 +106,6 @@ async function importSiswaFromWorkbookBuffer(buffer, { dryRun = false } = {}) {
   range.s.r = best.idx;
   ws["!ref"] = XLSX.utils.encode_range(range);
 
-  // raw:false => gunakan TEKS TAMPILAN (mempertahankan leading zero apabila
-  // kolom di Excel diformat Text / Custom "0000" atau diketik dengan apostrof '0001)
   const rows = XLSX.utils.sheet_to_json(ws, {
     defval: "",
     raw: false,
@@ -164,8 +162,6 @@ async function importSiswaFromWorkbookBuffer(buffer, { dryRun = false } = {}) {
       const payload = {};
       for (const [from, to] of Object.entries(mapped)) {
         const v = row[from];
-        // Jadikan null jika kosong; sisanya simpan sebagai string TRIM
-        // (leading zero tetap aman karena raw:false)
         payload[to] = v === "" ? null : String(v).trim();
       }
 
@@ -185,12 +181,9 @@ async function importSiswaFromWorkbookBuffer(buffer, { dryRun = false } = {}) {
         continue;
       }
 
-      // siapkan kolom & nilai (jangan paksa updated_at di insert; update saat upsert)
       const cols = Object.keys(payload).filter((k) => payload[k] !== null);
       const vals = cols.map((k) => payload[k]);
 
-      // ON CONFLICT: jika ada NIK (tidak kosong/null), targetkan partial unique index via
-      // "ON CONFLICT (nik) WHERE nik IS NOT NULL"
       const hasNik = payload.nik && String(payload.nik).trim() !== "";
 
       // kolom yang di-update saat upsert (jangan update 'nik')

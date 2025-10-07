@@ -83,13 +83,9 @@ export default function ImportSiswa() {
         </button>
       </div>
 
-      {/* Banner status */}
       <StatusBanner status={status} onClose={() => setStatus(null)} />
 
-      {/* Daftar siswa */}
       <Siswa key={refreshKey} />
-
-      {/* Modal Import */}
       <Modal
         open={open}
         onClose={() => setOpen(false)}

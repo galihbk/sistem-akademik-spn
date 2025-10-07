@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
+const path = require("path");
 const pool = require("./db/pool");
 
 const importRoutes = require("./routes/import.routes");
@@ -11,7 +12,7 @@ const statsRoutes = require("./routes/stats.routes");
 const siswaRoutes = require("./routes/siswa.routes");
 const refRoutes = require("./routes/ref.routes");
 const prestasiRoutes = require("./routes/prestasi.routes");
-const downloadRoutes = require("./routes/download.routes"); // <-- TAMBAH
+const downloadRoutes = require("./routes/download.routes");
 const riwayatRoutes = require("./routes/riwayat.routes");
 const exportRoutes = require("./routes/export.routes");
 const mentalRoutes = require("./routes/mental.routes");
@@ -21,10 +22,31 @@ const jasmaniRoutes = require("./routes/jasmani.routes");
 const jasmaniPoldaRoutes = require("./routes/jasmani_polda.routes");
 
 const app = express();
-app.use(helmet());
+
+/**
+ * HELMET GLOBAL:
+ * - CORP: cross-origin → izinkan <img> dari origin lain (5173 ↔ 4000)
+ * - COEP: off → hindari ERR_BLOCKED_BY_RESPONSE.NotSameOrigin
+ */
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginEmbedderPolicy: false,
+    // (opsional) kalau butuh popup login SSO: crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
+  })
+);
+
+// JAGA-JAGA: pastikan tidak ada header COEP/COOP yang tersisa
+app.use((req, res, next) => {
+  res.removeHeader("Cross-Origin-Embedder-Policy");
+  // res.removeHeader("Cross-Origin-Opener-Policy"); // biasanya tidak perlu dicabut
+  next();
+});
+
 app.use(express.json());
+
 const corsOpts = {
-  origin: "http://localhost:5173", // atau true kalau multi-origin
+  origin: "http://localhost:5173",
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
   allowedHeaders: ["Authorization", "Content-Type", "Accept"],
@@ -32,15 +54,22 @@ const corsOpts = {
 };
 app.use(cors(corsOpts));
 app.options("*", cors(corsOpts));
-// app.use(cors({ origin: true, credentials: true }));
-app.use(rateLimit({ windowMs: 60 * 1000, max: 60 }));
 
+// app.use(rateLimit({ windowMs: 60 * 1000, max: 60 }));
+
+/** (opsional) fallback static, berguna buat debug */
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+
+// ROUTES
 app.use("/auth", authRoutes);
 app.use("/import", importRoutes);
 app.use("/stats", statsRoutes);
 app.use("/siswa", siswaRoutes);
 app.use("/ref", refRoutes);
-app.use("/download", downloadRoutes); // <-- PASANG
+
+// /download mendukung ?inline=1
+app.use("/download", downloadRoutes);
+
 app.use("/upload", require("./routes/upload.routes"));
 app.use("/prestasi", prestasiRoutes);
 app.use("/riwayat_kesehatan", riwayatRoutes);
@@ -52,6 +81,7 @@ app.use("/mapel", mapelRoutes);
 app.use("/jasmani", jasmaniRoutes);
 app.use("/jasmani-polda", jasmaniPoldaRoutes);
 
+// Health checks
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/health/db", async (_req, res) => {
   try {

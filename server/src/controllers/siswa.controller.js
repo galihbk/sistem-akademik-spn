@@ -1,3 +1,5 @@
+const path = require("path");
+const fs = require("fs/promises");
 const pool = require("../db/pool");
 
 /**
@@ -393,11 +395,147 @@ async function rankMentalByNik(req, res) {
     return res.status(500).json({ error: "Internal error" });
   }
 }
+async function updatePartialByNik(req, res) {
+  try {
+    const nikParam = (req.params.nik || "").trim();
+    if (!nikParam) return res.status(400).json({ message: "NIK wajib diisi" });
+
+    // whitelist kolom yang boleh diupdate
+    const allowed = [
+      "nosis",
+      "nama",
+      "file_ktp",
+      "alamat",
+      "tempat_lahir",
+      "tanggal_lahir",
+      "umur",
+      "agama",
+      "jenis_kelamin",
+      "email",
+      "no_hp",
+      "dikum_akhir",
+      "jurusan",
+      "tb",
+      "bb",
+      "gol_darah",
+      "no_bpjs",
+      "sim_yang_dimiliki",
+      "no_hp_keluarga",
+      "nama_ayah_kandung",
+      "nama_ibu_kandung",
+      "pekerjaan_ayah_kandung",
+      "pekerjaan_ibu_kandung",
+      "asal_polda",
+      "asal_polres",
+      "kelompok_angkatan",
+      "diktuk_awal",
+      "tahun_diktuk",
+      "personel",
+      "ukuran_pakaian",
+      "ukuran_celana",
+      "ukuran_sepatu",
+      "ukuran_tutup_kepala",
+      "jenis_rekrutmen",
+      "batalion",
+      "ton",
+    ];
+
+    const body = req.body || {};
+    const sets = [];
+    const vals = [];
+    let i = 1;
+
+    for (const k of allowed) {
+      if (Object.prototype.hasOwnProperty.call(body, k)) {
+        sets.push(`"${k}" = $${i++}`);
+        vals.push(body[k]); // boleh null
+      }
+    }
+    if (sets.length === 0) {
+      return res
+        .status(400)
+        .json({ message: "Tidak ada kolom untuk diupdate" });
+    }
+    // nik di WHERE
+    vals.push(nikParam);
+
+    const sql = `
+      UPDATE siswa
+      SET ${sets.join(", ")}, updated_at = NOW()
+      WHERE nik = $${i}
+      RETURNING *;
+    `;
+    const r = await pool.query(sql, vals);
+    if (r.rowCount === 0) {
+      return res.status(404).json({ message: "Siswa tidak ditemukan" });
+    }
+    return res.json(r.rows[0]);
+  } catch (e) {
+    console.error("[siswa.updatePartialByNik]", e);
+    return res.status(500).json({ message: "Gagal update data siswa" });
+  }
+}
+
+/** ====== POST /siswa/nik/:nik/foto — upload foto ====== */
+// helper pastikan folder ada
+async function ensureDir(p) {
+  try {
+    await fs.mkdir(p, { recursive: true });
+  } catch {}
+}
+
+async function uploadFotoByNik(req, res) {
+  try {
+    const nikParam = (req.params.nik || "").trim();
+    if (!nikParam) return res.status(400).json({ message: "NIK wajib diisi" });
+    if (!req.file)
+      return res.status(400).json({ message: "file 'foto' wajib ada" });
+
+    // simpan file ke uploads/foto_siswa
+    const baseDir = path.join(process.cwd(), "uploads", "foto_siswa");
+    await ensureDir(baseDir);
+
+    const ext =
+      path.extname(req.file.originalname || ".jpg").toLowerCase() || ".jpg";
+    const safeExt = [".jpg", ".jpeg", ".png", ".webp"].includes(ext)
+      ? ext
+      : ".jpg";
+    const filename = `${nikParam}-${Date.now()}${safeExt}`;
+    const target = path.join(baseDir, filename);
+
+    await fs.writeFile(target, req.file.buffer);
+
+    // path yang dipakai UI (sesuaikan dengan /download?path=...)
+    const relativePath = `foto_siswa/${filename}`;
+
+    // update DB
+    const up = await pool.query(
+      `UPDATE siswa SET foto = $1, updated_at = NOW() WHERE nik = $2 RETURNING *`,
+      [relativePath, nikParam]
+    );
+    if (up.rowCount === 0) {
+      return res.status(404).json({ message: "Siswa tidak ditemukan" });
+    }
+    return res.json({ message: "OK", foto: relativePath, data: up.rows[0] });
+  } catch (e) {
+    console.error("[siswa.uploadFotoByNik]", e);
+    return res.status(500).json({ message: "Gagal upload foto" });
+  }
+}
+
+/** ====== GET /siswa/nik/:nik/jasmani_polda ====== */
+async function listJasmaniPolda(req, res) {
+  return sendRowsOrEmptyByNik(res, "jasmani_polda", req.params.nik);
+}
+
+// --- export tambahkan fungsi baru ---
 module.exports = {
   list,
   detailByNik,
   detailByNosis, // optional legacy
-  listSosiometri,
+
+  // relasi
+  listSosiometri, // <- bisa dihapus bila benar2 tidak dipakai
   listMental,
   listBK,
   listPelanggaran,
@@ -405,6 +543,13 @@ module.exports = {
   listPrestasi,
   listJasmani,
   listRiwayatKesehatan,
+  listJasmaniPolda, // ⬅️ baru
+
+  // write
   upsertByNik,
+  updatePartialByNik, // ⬅️ baru
+  uploadFotoByNik, // ⬅️ baru
+
+  // ranking
   rankMentalByNik,
 };

@@ -9,7 +9,6 @@ const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 const TABS = [
   { key: "biodata", label: "Biodata" },
-  { key: "sosiometri", label: "Sosiometri" },
   { key: "mental", label: "Mental Kepribadian" },
   { key: "bk", label: "BK" },
   { key: "pelanggaran", label: "Pelanggaran" },
@@ -17,6 +16,7 @@ const TABS = [
   { key: "prestasi", label: "Prestasi" },
   { key: "jasmani", label: "Jasmani" },
   { key: "riwayat_kesehatan", label: "Riwayat Kesehatan" },
+  { key: "jasmani_polda", label: "Jasmani Polda" }, // paling akhir
 ];
 
 /* ---------- Utils kecil ---------- */
@@ -43,12 +43,33 @@ function formatDateID(v) {
   }
 }
 
+function toInputDate(v) {
+  if (!v) return "";
+  try {
+    const d = new Date(v);
+    if (isNaN(d)) return "";
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  } catch {
+    return "";
+  }
+}
+
 function buildDownloadUrl(filePath) {
   if (!filePath) return "#";
   const clean = String(filePath)
     .replace(/^\/+/, "")
     .replace(/^uploads\//i, "");
   return `${API}/download?path=${encodeURIComponent(clean)}`;
+}
+
+// Untuk preview inline (img/video/audio)
+function buildViewUrl(filePath) {
+  const base = buildDownloadUrl(filePath); // /download?path=...
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}inline=1`;
 }
 
 async function handleDownload(filePath) {
@@ -129,10 +150,15 @@ function Field({ label, children }) {
 }
 
 function renderValue(key, val) {
-  if (!val) return "-";
+  if (!val && val !== 0) return "-";
 
   if (key === "foto") {
-    const src = String(val);
+    const raw = String(val);
+    const isAbs =
+      /^https?:\/\//i.test(raw) ||
+      raw.startsWith("data:") ||
+      raw.startsWith("blob:");
+    const src = isAbs ? raw : buildViewUrl(raw); // pakai inline=1
     return (
       <img
         src={src}
@@ -216,7 +242,7 @@ function DataTable({ rows }) {
   );
 }
 
-/* ---------- Mental ---------- */
+/* ---------- Mental-like table (dipakai untuk Mental, Mapel, Jasmani) ---------- */
 
 function MentalTable({ rows, rank }) {
   const norm = useMemo(() => {
@@ -270,10 +296,6 @@ function MentalTable({ rows, rank }) {
     return { count: nums.length, avg, min, max };
   }, [norm]);
 
-  if (!norm.length) {
-    return <div style={{ color: "#94a3b8" }}>Belum ada nilai mental.</div>;
-  }
-
   return (
     <>
       <div
@@ -289,7 +311,7 @@ function MentalTable({ rows, rank }) {
         }}
       >
         <div style={{ fontWeight: 800 }}>
-          Ringkasan Nilai Mental
+          Ringkasan
           {rank?.angkatan ? (
             <span className="muted" style={{ marginLeft: 8, fontWeight: 400 }}>
               · Ranking Angkatan <b>{rank.angkatan}</b>
@@ -318,86 +340,94 @@ function MentalTable({ rows, rank }) {
           </SummaryItem>
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0,1fr))",
-            gap: 12,
-          }}
-        >
-          <RankItem
-            label="Global"
-            pos={rank?.rank?.global?.pos}
-            total={rank?.rank?.global?.total}
-          />
-          <RankItem
-            label={`Batalion${rank?.batalion ? ` ${rank.batalion}` : ""}`}
-            pos={rank?.rank?.batalion?.pos}
-            total={rank?.rank?.batalion?.total}
-          />
-          <RankItem
-            label={`Kompi${rank?.kompi ? ` ${rank.kompi}` : ""}`}
-            pos={rank?.rank?.kompi?.pos}
-            total={rank?.rank?.kompi?.total}
-          />
-          <RankItem
-            label={
-              rank?.kompi && rank?.pleton != null
-                ? `Pleton ${rank.kompi}${rank.pleton}`
-                : "Pleton"
-            }
-            pos={rank?.rank?.pleton?.pos}
-            total={rank?.rank?.pleton?.total}
-          />
-        </div>
+        {rank ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, minmax(0,1fr))",
+              gap: 12,
+            }}
+          >
+            <RankItem
+              label="Global"
+              pos={rank?.rank?.global?.pos}
+              total={rank?.rank?.global?.total}
+            />
+            <RankItem
+              label={`Batalion${rank?.batalion ? ` ${rank.batalion}` : ""}`}
+              pos={rank?.rank?.batalion?.pos}
+              total={rank?.rank?.batalion?.total}
+            />
+            <RankItem
+              label={`Kompi${rank?.kompi ? ` ${rank.kompi}` : ""}`}
+              pos={rank?.rank?.kompi?.pos}
+              total={rank?.rank?.kompi?.total}
+            />
+            <RankItem
+              label={
+                rank?.kompi && rank?.pleton != null
+                  ? `Pleton ${rank.kompi}${rank.pleton}`
+                  : "Pleton"
+              }
+              pos={rank?.rank?.pleton?.pos}
+              total={rank?.rank?.pleton?.total}
+            />
+          </div>
+        ) : null}
 
         <div className="muted" style={{ fontSize: 12 }}>
           Hanya nilai numeric (mis. <code>78</code>, <code>80,5</code>→80.5)
-          yang dihitung. Ranking dibatasi per angkatan.
+          yang dihitung untuk ringkasan.
         </div>
       </div>
 
-      <div style={{ overflowX: "auto" }}>
-        <table className="table" style={{ width: "100%" }}>
-          <thead>
-            <tr>
-              <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
-                Minggu
-              </th>
-              <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>Nilai</th>
-              <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
-                Catatan
-              </th>
-              <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
-                Diubah
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {norm.map((r, i) => (
-              <tr key={i}>
-                <td style={{ whiteSpace: "nowrap" }}>
-                  {typeof r.minggu_ke === "number"
-                    ? `Minggu ${r.minggu_ke}`
-                    : r.minggu_ke ?? "-"}
-                </td>
-                <td style={{ whiteSpace: "nowrap" }}>{r.nilai ?? "-"}</td>
-                <td style={{ maxWidth: 600, overflowWrap: "anywhere" }}>
-                  {r.catatan ?? "-"}
-                </td>
-                <td style={{ whiteSpace: "nowrap" }}>
-                  {r.time ? r.time.toLocaleString("id-ID") : "-"}
-                </td>
+      {norm.length ? (
+        <div style={{ overflowX: "auto" }}>
+          <table className="table" style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Minggu
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Nilai
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Catatan
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Diubah
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {norm.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {typeof r.minggu_ke === "number"
+                      ? `Minggu ${r.minggu_ke}`
+                      : r.minggu_ke ?? "-"}
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>{r.nilai ?? "-"}</td>
+                  <td style={{ maxWidth: 600, overflowWrap: "anywhere" }}>
+                    {r.catatan ?? "-"}
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {r.time ? r.time.toLocaleString("id-ID") : "-"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div style={{ color: "#94a3b8" }}>Belum ada data.</div>
+      )}
     </>
   );
 }
 
-/* ---------- Dokumen (BK, Pelanggaran, Prestasi, Riwayat Kesehatan) ---------- */
+/* ---------- DownloadNotice (banner progres) ---------- */
 
 function DownloadNotice({ message, percent }) {
   if (!message && percent == null) return null;
@@ -442,7 +472,8 @@ function DownloadNotice({ message, percent }) {
   );
 }
 
-/** Tabel generik untuk semua tab dokumen */
+/* ---------- DocTable (BK, Pelanggaran, Prestasi, Riwayat Kesehatan) ---------- */
+
 function DocTable({ rows, onDelete }) {
   if (!rows?.length)
     return <div style={{ color: "#94a3b8" }}>Belum ada data.</div>;
@@ -607,29 +638,413 @@ const GROUPS = [
   },
 ];
 
-function SectionCard({ title, cols = 3, biodata }) {
+/* ---------- SectionCard editable (foto di kanan utk “Foto & Identitas”) ---------- */
+
+function isReadOnlyKey(key) {
+  return (
+    key === "foto" ||
+    key === "file_ktp" ||
+    key === "created_at" ||
+    key === "updated_at" ||
+    key === "nik"
+  );
+}
+function isDateKey(key) {
+  return key === "tanggal_lahir";
+}
+function isSelectKey(key) {
+  return key === "jenis_kelamin" || key === "agama";
+}
+
+function SectionCard({
+  title,
+  cols = 3,
+  biodata,
+  onSave,
+  onEditFoto,
+  busyKeys = {},
+}) {
   const group = GROUPS.find((g) => g.title === title);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({});
+
+  useEffect(() => {
+    if (!editing) setForm({});
+  }, [editing, biodata?.nik]);
+
   if (!group) return null;
+
+  const startEdit = () => {
+    const init = {};
+    for (const [key] of group.fields) init[key] = biodata?.[key] ?? "";
+    setForm(init);
+    setEditing(true);
+  };
+  const cancel = () => {
+    setEditing(false);
+    setForm({});
+  };
+
+  const save = async () => {
+    try {
+      setSaving(true);
+      const payload = {};
+      for (const [key] of group.fields) {
+        if (isReadOnlyKey(key)) continue;
+        const before = biodata?.[key] ?? "";
+        const now = form[key];
+        if (isDateKey(key)) {
+          if (now !== "" && now !== before) payload[key] = now;
+          else if (now === "" && before) payload[key] = null;
+        } else if (now !== before) {
+          payload[key] = now === "" ? null : now;
+        }
+      }
+      if (Object.keys(payload).length === 0) {
+        setEditing(false);
+        return;
+      }
+      await onSave?.(payload);
+      setEditing(false);
+    } catch (e) {
+      alert(e?.message || "Gagal menyimpan data");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  function FotoCell() {
+    const val = biodata?.foto;
+    const [uploading, setUploading] = useState(false);
+    const [preview, setPreview] = useState("");
+
+    const onPick = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        setUploading(true);
+        setPreview(URL.createObjectURL(file));
+        await onEditFoto?.(file);
+      } catch (err) {
+        alert(err?.message || "Gagal upload foto");
+        setPreview("");
+      } finally {
+        setUploading(false);
+      }
+    };
+
+    return (
+      <div style={{ position: "relative", width: 180, justifySelf: "end" }}>
+        <img
+          src={
+            preview ||
+            (val
+              ? /^(https?:|data:|blob:)/i.test(String(val))
+                ? String(val)
+                : buildViewUrl(val)
+              : "data:image/svg+xml;utf8," +
+                encodeURIComponent(
+                  `<svg xmlns='http://www.w3.org/2000/svg' width='180' height='220'><rect width='100%' height='100%' fill='#0b1220'/><text x='50%' y='50%' fill='#64748b' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='12'>No Photo</text></svg>`
+                ))
+          }
+          alt="Foto siswa"
+          style={{
+            width: 180,
+            height: 220,
+            objectFit: "cover",
+            borderRadius: 8,
+            border: "1px solid #1f2937",
+            display: "block",
+          }}
+          onError={(e) => {
+            e.currentTarget.src =
+              "data:image/svg+xml;utf8," +
+              encodeURIComponent(
+                `<svg xmlns='http://www.w3.org/2000/svg' width='180' height='220'><rect width='100%' height='100%' fill='#0b1220'/><text x='50%' y='50%' fill='#64748b' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='12'>No Photo</text></svg>`
+              );
+          }}
+        />
+        <label
+          style={{
+            position: "absolute",
+            top: 6,
+            right: 6,
+            background: "#0b1220",
+            border: "1px solid #1f2937",
+            padding: "4px 8px",
+            borderRadius: 8,
+            fontSize: 12,
+            cursor: uploading ? "not-allowed" : "pointer",
+            opacity: uploading ? 0.6 : 1,
+          }}
+          title="Edit Foto"
+        >
+          {uploading ? "Uploading..." : "Edit Foto"}
+          <input
+            type="file"
+            accept="image/*"
+            style={{ display: "none" }}
+            disabled={uploading}
+            onChange={onPick}
+          />
+        </label>
+      </div>
+    );
+  }
+
+  const isBusy = !!busyKeys[title];
+  const isFotoIdentitas = title === "Foto & Identitas";
+
   return (
     <div
       className="card"
-      style={{ background: "#0b1220", border: "1px solid #1f2937" }}
+      style={{
+        background: "#0b1220",
+        border: "1px solid #1f2937",
+        position: "relative",
+      }}
     >
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>{title}</div>
+      {/* Header */}
       <div
-        className="grid"
         style={{
-          display: "grid",
-          gap: 12,
-          gridTemplateColumns: `repeat(${cols}, minmax(0,1fr))`,
+          display: "flex",
+          justifyContent: "space-between",
+          marginBottom: 8,
+          alignItems: "center",
         }}
       >
-        {group.fields.map(([key, label]) => (
-          <Field key={key} label={label}>
-            {renderValue(key, biodata?.[key])}
-          </Field>
-        ))}
+        <div style={{ fontWeight: 700 }}>{title}</div>
+        {!editing ? (
+          <button
+            className="btn"
+            onClick={startEdit}
+            disabled={isBusy}
+            style={{ padding: "6px 10px" }}
+          >
+            Edit
+          </button>
+        ) : (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="btn"
+              onClick={save}
+              disabled={saving}
+              style={{ padding: "6px 10px" }}
+            >
+              {saving ? "Menyimpan..." : "Simpan"}
+            </button>
+            <button
+              className="btn"
+              onClick={cancel}
+              disabled={saving}
+              style={{
+                padding: "6px 10px",
+                background: "#1b0c0c",
+                border: "1px solid #7f1d1d",
+                color: "#fca5a5",
+              }}
+            >
+              Batal
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Body */}
+      {isFotoIdentitas ? (
+        // Foto di kanan
+        <div
+          style={{
+            display: "grid",
+            gap: 12,
+            gridTemplateColumns: `repeat(${Math.max(
+              1,
+              cols - 1
+            )}, minmax(0,1fr)) 200px`,
+            alignItems: "start",
+            opacity: isBusy ? 0.6 : 1,
+            pointerEvents: isBusy ? "none" : "auto",
+          }}
+        >
+          {/* Kiri: semua field kecuali foto */}
+          <div
+            style={{
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: `repeat(${Math.max(
+                1,
+                cols - 1
+              )}, minmax(0,1fr))`,
+            }}
+          >
+            {group.fields
+              .filter(([key]) => key !== "foto")
+              .map(([key, label]) => {
+                if (!editing) {
+                  return (
+                    <Field key={key} label={label}>
+                      {renderValue(key, biodata?.[key])}
+                    </Field>
+                  );
+                }
+                if (isDateKey(key)) {
+                  return (
+                    <Field key={key} label={label}>
+                      <input
+                        type="date"
+                        value={toInputDate(form[key]) || ""}
+                        disabled={isReadOnlyKey(key)}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, [key]: e.target.value }))
+                        }
+                        style={{ width: "100%" }}
+                      />
+                    </Field>
+                  );
+                }
+                if (isSelectKey(key)) {
+                  const options =
+                    key === "jenis_kelamin"
+                      ? ["Laki-laki", "Perempuan"]
+                      : [
+                          "Islam",
+                          "Kristen",
+                          "Katolik",
+                          "Hindu",
+                          "Buddha",
+                          "Konghucu",
+                          "Lainnya",
+                        ];
+                  return (
+                    <Field key={key} label={label}>
+                      <select
+                        value={form[key] ?? ""}
+                        disabled={isReadOnlyKey(key)}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, [key]: e.target.value }))
+                        }
+                        style={{ width: "100%" }}
+                      >
+                        <option value="">-</option>
+                        {options.map((o) => (
+                          <option key={o} value={o}>
+                            {o}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  );
+                }
+                return (
+                  <Field key={key} label={label}>
+                    <input
+                      type="text"
+                      value={form[key] ?? ""}
+                      disabled={isReadOnlyKey(key)}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, [key]: e.target.value }))
+                      }
+                      style={{ width: "100%" }}
+                      placeholder="-"
+                    />
+                  </Field>
+                );
+              })}
+          </div>
+
+          {/* Kanan: foto */}
+          <div>
+            <Field label="Foto">
+              <FotoCell />
+            </Field>
+          </div>
+        </div>
+      ) : (
+        // Default layout
+        <div
+          className="grid"
+          style={{
+            display: "grid",
+            gap: 12,
+            gridTemplateColumns: `repeat(${cols}, minmax(0,1fr))`,
+            opacity: isBusy ? 0.6 : 1,
+            pointerEvents: isBusy ? "none" : "auto",
+          }}
+        >
+          {group.fields.map(([key, label]) => {
+            if (!editing) {
+              return (
+                <Field key={key} label={label}>
+                  {renderValue(key, biodata?.[key])}
+                </Field>
+              );
+            }
+            if (isDateKey(key)) {
+              return (
+                <Field key={key} label={label}>
+                  <input
+                    type="date"
+                    value={toInputDate(form[key]) || ""}
+                    disabled={isReadOnlyKey(key)}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, [key]: e.target.value }))
+                    }
+                    style={{ width: "100%" }}
+                  />
+                </Field>
+              );
+            }
+            if (isSelectKey(key)) {
+              const options =
+                key === "jenis_kelamin"
+                  ? ["Laki-laki", "Perempuan"]
+                  : [
+                      "Islam",
+                      "Kristen",
+                      "Katolik",
+                      "Hindu",
+                      "Buddha",
+                      "Konghucu",
+                      "Lainnya",
+                    ];
+              return (
+                <Field key={key} label={label}>
+                  <select
+                    value={form[key] ?? ""}
+                    disabled={isReadOnlyKey(key)}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, [key]: e.target.value }))
+                    }
+                    style={{ width: "100%" }}
+                  >
+                    <option value="">-</option>
+                    {options.map((o) => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              );
+            }
+            return (
+              <Field key={key} label={label}>
+                <input
+                  type="text"
+                  value={form[key] ?? ""}
+                  disabled={isReadOnlyKey(key)}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, [key]: e.target.value }))
+                  }
+                  style={{ width: "100%" }}
+                  placeholder="-"
+                />
+              </Field>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -645,6 +1060,8 @@ export default function SiswaDetail({ nik }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [deletingId, setDeletingId] = useState(null);
+
+  const [busyCard, setBusyCard] = useState({}); // {title: true/false}
 
   // notifikasi download/export global
   const [dlMsg, setDlMsg] = useState("");
@@ -708,6 +1125,7 @@ export default function SiswaDetail({ nik }) {
       const json = await fetchSiswaTabByNik(safeNik, tabKey, token);
       const rows = Array.isArray(json) ? json : json.items || [];
       setDataMap((m) => ({ ...m, [tabKey]: rows }));
+
       if (tabKey === "mental") {
         try {
           const rank = await fetchMentalRankByNik(safeNik, token);
@@ -729,8 +1147,60 @@ export default function SiswaDetail({ nik }) {
     loadTab(k);
   }
 
-  function back() {
-    window.location.hash = "#/siswa";
+  // --- API helpers untuk UPDATE biodata & upload foto
+  async function updateBiodata(partialPayload, cardTitle) {
+    if (!biodata?.nik) throw new Error("NIK tidak tersedia");
+    const token = await window.authAPI?.getToken?.();
+    try {
+      setBusyCard((m) => ({ ...m, [cardTitle]: true }));
+      const res = await fetch(
+        `${API}/siswa/nik/${encodeURIComponent(biodata.nik)}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(partialPayload),
+        }
+      );
+      if (!res.ok) {
+        const msg = await res.text().catch(() => "");
+        throw new Error(msg || `Gagal menyimpan (HTTP ${res.status})`);
+      }
+      const updated = await res.json().catch(() => ({}));
+      setBiodata((b) => ({ ...(b || {}), ...(updated || partialPayload) }));
+    } finally {
+      setBusyCard((m) => ({ ...m, [cardTitle]: false }));
+    }
+  }
+
+  async function uploadFoto(file) {
+    if (!biodata?.nik) throw new Error("NIK tidak tersedia");
+    const token = await window.authAPI?.getToken?.();
+    const fd = new FormData();
+    fd.append("foto", file);
+    const res = await fetch(
+      `${API}/siswa/nik/${encodeURIComponent(biodata.nik)}/foto`,
+      {
+        method: "POST",
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: fd,
+      }
+    );
+    if (!res.ok) {
+      const msg = await res.text().catch(() => "");
+      throw new Error(msg || `Gagal upload foto (HTTP ${res.status})`);
+    }
+    const json = await res.json().catch(() => ({}));
+    const newUrl = json?.foto || json?.url || null;
+    if (newUrl) {
+      setBiodata((b) => ({ ...(b || {}), foto: newUrl }));
+    }
+    return newUrl;
   }
 
   // hapus BK
@@ -868,6 +1338,11 @@ export default function SiswaDetail({ nik }) {
               title={g.title}
               cols={g.cols}
               biodata={biodata}
+              onSave={(payload) => updateBiodata(payload, g.title)}
+              onEditFoto={
+                g.title === "Foto & Identitas" ? uploadFoto : undefined
+              }
+              busyKeys={busyCard}
             />
           ))}
         </div>
@@ -884,6 +1359,14 @@ export default function SiswaDetail({ nik }) {
 
     if (active === "mental") {
       return <MentalTable rows={dataMap["mental"] || []} rank={mentalRank} />;
+    }
+
+    // Mapel & Jasmani: tampilkan ala MentalTable (ringkasan angka + tabel)
+    if (active === "mapel") {
+      return <MentalTable rows={dataMap["mapel"] || []} />;
+    }
+    if (active === "jasmani") {
+      return <MentalTable rows={dataMap["jasmani"] || []} />;
     }
 
     if (active === "bk") {
@@ -947,6 +1430,7 @@ export default function SiswaDetail({ nik }) {
       );
     }
 
+    // default untuk tab lain (mis. jasmani_polda → tabel generik)
     return <DataTable rows={dataMap[active] || []} />;
   }
 
@@ -957,7 +1441,6 @@ export default function SiswaDetail({ nik }) {
     }
     const url = `${API}/export/all?nik=${encodeURIComponent(biodata.nik)}`;
 
-    // Cek ketersediaan endpoint (HEAD), baru download
     fetch(url, { method: "HEAD" })
       .then((r) => {
         if (!r.ok) throw new Error("Export tidak tersedia");
@@ -999,9 +1482,6 @@ export default function SiswaDetail({ nik }) {
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn" onClick={startExport}>
               Export PDF
-            </button>
-            <button className="btn" onClick={back}>
-              Kembali
             </button>
           </div>
         </div>

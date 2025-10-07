@@ -581,11 +581,11 @@ UNION ALL
 SELECT jasmani_spn_id, siswa_id, nosis, nama, kompi, pleton, tahap,
        'Pull Up (RS)', pull_up_rs::text, 'RS', keterangan, sumber_file, created_at, updated_at
 FROM ident;
--- ======================================================================
--- NILAI JASMANI POLDA (Sheet1) — IMPORT-ONLY (tanpa JSONB)
+--- ======================================================================
+-- NILAI JASMANI POLDA (IMPORT-ONLY, TANPA JSONB)
 -- ======================================================================
 
--- FK helper
+-- Pastikan helper updated_at ada (umumnya sudah didefinisikan di awal file)
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS trigger AS $$
 BEGIN
@@ -594,73 +594,71 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- 1) Tabel utama (baru/pertahankan struktur)
 CREATE TABLE IF NOT EXISTS jasmani_polda (
   id                  BIGSERIAL PRIMARY KEY,
 
-  -- relasi manual (nullable; akan di-plot belakangan lewat UI)
+  -- mapping manual (opsional, boleh NULL saat import)
   siswa_id            INT NULL REFERENCES siswa(id) ON DELETE SET NULL,
 
-  -- identitas baris (dari sheet)
-  no_panda            TEXT,
+  -- identitas baris dari Excel
+  no_panda            TEXT,             -- "PANDA" / "NO PANDA" di header
   nama                TEXT,
-  jk                  TEXT,              -- L / P dll
+  jenis_kelamin       TEXT,             -- JK (L/P), disimpan ke jenis_kelamin
   jalur_seleksi       TEXT,
+  angkatan            TEXT,             -- kunci upsert bareng no_panda
 
-  -- ANTHRO
-  tb_cm               NUMERIC(10,2),     -- ANTHRO TB
-  bb_kg               NUMERIC(10,2),     -- BB
-  ratio_index         TEXT,              -- RATIO INDEX
-  somato_type         TEXT,              -- SOMATO TYPE
-  klasifikasi_tipe_tubuh TEXT,           -- KLASIFIKASI TIPE TIBUH
+  -- ANTHRO & deskriptif
+  tb_cm               NUMERIC(10,2),
+  bb_kg               NUMERIC(10,2),
+  ratio_index         TEXT,
+  somato_type         TEXT,
+  klasifikasi_tipe_tubuh TEXT,
   nilai_tipe_tubuh    NUMERIC(10,2),
   nilai_kelainan      NUMERIC(10,2),
   nilai_terkecil      NUMERIC(10,2),
-  nilai_anthro        NUMERIC(10,2),
-  pencapaian_nbl      TEXT,              -- PENCAPAIAN NBL (kalau ada)
+  nilai_anthro        NUMERIC(10,2),    -- angka
+  antro               TEXT,             -- huruf/grade
+  pencapaian_nbl      TEXT,
 
-  -- RENANG (kolom utama & bobot x20)
+  -- RENANG (+ bobot x20) & KESAMAPTAAN A/B (single value)
   renang              NUMERIC(10,2),
   renang_x20          NUMERIC(10,2),
 
-  -- KESAMAPTAAN A (umumnya lari 12 menit; naming dibuat generik)
-  lari_12_menit       NUMERIC(10,2),
+  lari_12_menit       NUMERIC(10,2),    -- Kesamaptaan A
 
-  -- KESAMAPTAAN B (sub-item sesuai header Sheet1)
-  pull_up_chinning    NUMERIC(10,2),
+  pull_up_chinning    NUMERIC(10,2),    -- Kesamaptaan B
   sit_up              NUMERIC(10,2),
   push_up             NUMERIC(10,2),
   shuttle_run         NUMERIC(10,2),
 
-  -- Rekap / agregat
+  -- Rekap
   nilai_b             NUMERIC(10,2),
-  na_a_b              NUMERIC(10,2),     -- NA A+B
-  antro               NUMERIC(10,2),
-  samapta_x80         NUMERIC(10,2),     -- SAMAPTA X80
+  na_a_b              NUMERIC(10,2),    -- NA A+B
+  samapta_x80         NUMERIC(10,2),    -- SAMAPTA X80
   nilai_akhir         NUMERIC(10,2),
   ktgr                TEXT,
   ket                 TEXT,
   catatan             TEXT,
   paraf               TEXT,
 
-  -- metadata asal
-  polda               TEXT,              -- contoh: "POLDA DIY"
-  panda               TEXT,              -- contoh: "PANDA DIY"
-  tahun               TEXT,              -- contoh: "2025"
-  angkatan            TEXT,              -- contoh: "55"
-  sumber_file         TEXT,              -- nama file asal
-  sheet_name          TEXT,              -- default "Sheet1"
+  -- metadata asal file
+  sumber_file         TEXT,
+  sheet_name          TEXT,
 
   created_at          TIMESTAMP DEFAULT NOW(),
   updated_at          TIMESTAMP DEFAULT NOW()
 );
 
--- Guard kolom (idempoten bila struktur lama sudah ada)
+-- 2) Guard kolom (idempotent – aman bila tabel sudah ada versi lama)
 ALTER TABLE jasmani_polda
   ADD COLUMN IF NOT EXISTS siswa_id              INT,
   ADD COLUMN IF NOT EXISTS no_panda              TEXT,
   ADD COLUMN IF NOT EXISTS nama                  TEXT,
-  ADD COLUMN IF NOT EXISTS jk                    TEXT,
+  ADD COLUMN IF NOT EXISTS jenis_kelamin         TEXT,
   ADD COLUMN IF NOT EXISTS jalur_seleksi         TEXT,
+  ADD COLUMN IF NOT EXISTS angkatan              TEXT,
+
   ADD COLUMN IF NOT EXISTS tb_cm                 NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS bb_kg                 NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS ratio_index           TEXT,
@@ -670,33 +668,33 @@ ALTER TABLE jasmani_polda
   ADD COLUMN IF NOT EXISTS nilai_kelainan        NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS nilai_terkecil        NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS nilai_anthro          NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS antro                 TEXT,
   ADD COLUMN IF NOT EXISTS pencapaian_nbl        TEXT,
+
   ADD COLUMN IF NOT EXISTS renang                NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS renang_x20            NUMERIC(10,2),
+
   ADD COLUMN IF NOT EXISTS lari_12_menit         NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS pull_up_chinning      NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS sit_up                NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS push_up               NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS shuttle_run           NUMERIC(10,2),
+
   ADD COLUMN IF NOT EXISTS nilai_b               NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS na_a_b                NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS antro                 NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS samapta_x80           NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS nilai_akhir           NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS ktgr                  TEXT,
   ADD COLUMN IF NOT EXISTS ket                   TEXT,
   ADD COLUMN IF NOT EXISTS catatan               TEXT,
   ADD COLUMN IF NOT EXISTS paraf                 TEXT,
-  ADD COLUMN IF NOT EXISTS polda                 TEXT,
-  ADD COLUMN IF NOT EXISTS panda                 TEXT,
-  ADD COLUMN IF NOT EXISTS tahun                 TEXT,
-  ADD COLUMN IF NOT EXISTS angkatan              TEXT,
+
   ADD COLUMN IF NOT EXISTS sumber_file           TEXT,
   ADD COLUMN IF NOT EXISTS sheet_name            TEXT,
   ADD COLUMN IF NOT EXISTS created_at            TIMESTAMP DEFAULT NOW(),
   ADD COLUMN IF NOT EXISTS updated_at            TIMESTAMP DEFAULT NOW();
 
--- Trigger updated_at
+-- 3) Trigger updated_at
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_jasmani_polda_updated') THEN
@@ -706,10 +704,25 @@ BEGIN
   END IF;
 END$$;
 
--- Index bantu
-CREATE INDEX IF NOT EXISTS idx_jp_siswa_id        ON jasmani_polda (siswa_id);
-CREATE INDEX IF NOT EXISTS idx_jp_nama_lower      ON jasmani_polda (LOWER(nama));
-CREATE INDEX IF NOT EXISTS idx_jp_meta            ON jasmani_polda (polda, panda, tahun, angkatan);
+-- 4) Index bantu
+CREATE INDEX IF NOT EXISTS idx_jp_nopanda       ON jasmani_polda (no_panda);
+CREATE INDEX IF NOT EXISTS idx_jp_angkatan      ON jasmani_polda (angkatan);
+CREATE INDEX IF NOT EXISTS idx_jp_nama_lower    ON jasmani_polda (LOWER(nama));
+
+-- 5) (OPSIONAL) Cegah duplikat per (no_panda, angkatan) — aktifkan kalau mau strict
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE table_name='jasmani_polda'
+      AND constraint_type='UNIQUE'
+      AND constraint_name='uq_jp_no_panda_angkatan'
+  ) THEN
+    ALTER TABLE jasmani_polda
+      ADD CONSTRAINT uq_jp_no_panda_angkatan UNIQUE (no_panda, angkatan);
+  END IF;
+END$$;
+
 -- ======================================================================
 -- END: NILAI JASMANI POLDA
 -- ======================================================================
