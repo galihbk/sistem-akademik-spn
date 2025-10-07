@@ -1,32 +1,22 @@
-// src/controllers/jasmani.controller.js
 const fs = require("fs");
 const path = require("path");
 const XLSX = require("xlsx");
 const pool = require("../db/pool");
 
-/* ---------- helpers ---------- */
 const toNum = (v) => {
   if (v == null || v === "") return null;
   const f = parseFloat(String(v).replace(",", "."));
   return Number.isFinite(f) ? f : null;
 };
 
-// normalisasi header -> token sederhana
 function normKey(s) {
   return String(s || "")
     .toLowerCase()
-    .replace(/\s+/g, " ") // multi spasi -> 1 spasi
-    .replace(/[^\w\s]/g, "") // buang tanda baca
+    .replace(/\s+/g, " ")
+    .replace(/[^\w\s]/g, "")
     .trim();
 }
 
-/**
- * Deteksi kolom dari header (mendukung variasi penulisan dan (TS)/(RS))
- * KUNCI yang DIHASILKAN harus sama dengan kolom di DB:
- *   lari_12_menit_ts, lari_12_menit_rs, sit_up_ts, sit_up_rs, shuttle_run_ts, shuttle_run_rs,
- *   push_up_ts, push_up_rs, pull_up_ts, pull_up_rs, nilai_akhir, keterangan
- * (nosis & nama untuk lookup siswa)
- */
 function detectColumns(headersRaw) {
   const headers = headersRaw.map((h) => ({ raw: h, key: normKey(h) }));
 
@@ -125,12 +115,6 @@ async function resolveSiswaId(client, nosis, nama, caches) {
   return null;
 }
 
-/* =========================================================
- * POST /jasmani/import-excel
- * Body: multipart/form-data (field: file)
- * Query: ?tahap=1 (opsional)
- * Sheet: REKAP
- * ========================================================= */
 exports.importExcel = async (req, res) => {
   if (!req.file)
     return res

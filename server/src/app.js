@@ -18,6 +18,7 @@ const mentalRoutes = require("./routes/mental.routes");
 const makeDocsRoutes = require("./routes/docs.routes");
 const mapelRoutes = require("./routes/mapel.routes");
 const jasmaniRoutes = require("./routes/jasmani.routes");
+const jasmaniPoldaRoutes = require("./routes/jasmani_polda.routes");
 
 const app = express();
 app.use(helmet());
@@ -49,6 +50,7 @@ app.use("/bk", makeDocsRoutes("bk"));
 app.use("/pelanggaran", makeDocsRoutes("pelanggaran"));
 app.use("/mapel", mapelRoutes);
 app.use("/jasmani", jasmaniRoutes);
+app.use("/jasmani-polda", jasmaniPoldaRoutes);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/health/db", async (_req, res) => {

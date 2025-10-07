@@ -17,6 +17,7 @@ import ImportJasmani from "./pages/ImportJasmani";
 import UploadPdf from "./pages/UploadPdf";
 import InputPrestasi from "./pages/InputPrestasi";
 import InputRiwayatKesehatan from "./pages/InputRiwayatKesehatan";
+import ImportJasmaniPolda from "./pages/ImportJasmaniPolda";
 
 import Settings from "./pages/Settings";
 
@@ -114,7 +115,9 @@ function parseHash() {
   if (seg[0] === "siswa" && seg[1]) {
     return { name: "siswaDetail", params: { nik: decodeURIComponent(seg[1]) } };
   }
-
+  if (seg[0] === "import" && seg[1] === "jasmani-polda") {
+    return { name: "importJasmaniPolda" };
+  }
   // import index & masing-masing jenis
   if (seg[0] === "import" && !seg[1]) return { name: "importIndex" };
   if (seg[0] === "import" && seg[1] === "siswa") return { name: "importSiswa" };
@@ -180,6 +183,11 @@ export default function App() {
             key: "import-jasmani",
             label: "Nilai Jasmani",
             href: "#/import/jasmani",
+          },
+          {
+            key: "import-jasmani-polda",
+            label: "Nilai Jasmani Polda",
+            href: "#/import/jasmani-polda",
           },
           { key: "sep-1", separator: true },
           { key: "upload-bk", label: "Upload BK (PDF)", href: "#/upload/bk" },
@@ -262,6 +270,10 @@ export default function App() {
     title = "Riwayat Kesehatan";
     active = "import";
     content = <InputRiwayatKesehatan />;
+  } else if (route.name === "importJasmaniPolda") {
+    title = "Jasmani Polda";
+    active = "import";
+    content = <ImportJasmaniPolda />;
   } else if (route.name === "settings") {
     title = "Settings";
     active = "settings";

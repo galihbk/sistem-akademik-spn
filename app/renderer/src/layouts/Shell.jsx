@@ -7,8 +7,9 @@ const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 function isActiveHref(href) {
   if (!href) return false;
   const hash = window.location.hash || "#/dashboard";
-  // contoh href "#/import/siswa" -> aktif kalau hash diawali itu
-  return hash.startsWith(href);
+  // Aktif jika persis sama, atau prefix + "/" (bukan sekadar prefix)
+  // Contoh: "#/import/xxx" tidak akan mengaktifkan "#/import/xx"
+  return hash === href || hash.startsWith(href + "/");
 }
 
 function SideLink({ item }) {
@@ -48,6 +49,7 @@ function SideGroup({ item }) {
 
   const hasActiveChild = useMemo(() => {
     if (!item?.children?.length) return false;
+    // Untuk membuka group, kita tetap pakai startsWith agar semua route child bikin group kebuka
     return item.children.some((c) => c.href && hash.startsWith(c.href));
   }, [item, hash]);
 
