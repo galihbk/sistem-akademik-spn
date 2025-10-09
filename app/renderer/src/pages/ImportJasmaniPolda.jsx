@@ -115,6 +115,7 @@ export default function ImportJasmaniPolda() {
           // samakan pola dengan SPN: endpoint khusus excel
           endpoint="/jasmani-polda/import-excel" // POST (multipart)
           title="Import Nilai Jasmani POLDA (Sheet: Sheet1)"
+          templatePath="templates/Template-import-jasmani-polda.xlsx"
           requireAngkatan
           defaultAngkatan={angkatanFromShell || ""}
           // opsional: kirim meta (tahun/polda/panda) via query/body ImportExcel (sesuaikan komponenmu)

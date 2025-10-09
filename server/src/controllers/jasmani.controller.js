@@ -1,7 +1,10 @@
+// controllers/jasmani.controller.js
 const fs = require("fs");
 const path = require("path");
 const XLSX = require("xlsx");
 const pool = require("../db/pool");
+
+/* ========= Helpers ========= */
 
 const toNum = (v) => {
   if (v == null || v === "") return null;
@@ -9,12 +12,19 @@ const toNum = (v) => {
   return Number.isFinite(f) ? f : null;
 };
 
+const toInt = (v) => {
+  if (v == null || v === "") return null;
+  const n = parseInt(String(v).trim(), 10);
+  return Number.isFinite(n) ? n : null;
+};
+
+// Normalisasi header: semua non-alfanumerik -> spasi; rapikan spasi
 function normKey(s) {
   return String(s || "")
     .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/[^\w\s]/g, "")
-    .trim();
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function detectColumns(headersRaw) {
@@ -22,72 +32,72 @@ function detectColumns(headersRaw) {
 
   const want = {
     nosis: [/^nosis$/, /^no\s*sis$/, /^no\s*induk$/],
-    nama: [/^nama$/], // optional lookup
+    nama: [/^nama$/],
+    tahap: [/^tahap$/],
 
-    lari_12_menit_ts: [
-      /^lari\s*12\s*menit\s*ts$/,
-      /^lari\s*12\s*menit\s*\(ts\)$/,
-      /^lari\s*12\s*ts$/,
-      /^lari12\s*ts$/,
-    ],
-    lari_12_menit_rs: [
-      /^lari\s*12\s*menit\s*rs$/,
-      /^lari\s*12\s*menit\s*\(rs\)$/,
-      /^lari\s*12\s*rs$/,
-      /^lari12\s*rs$/,
-    ],
+    // Lari 12 menit
+    lari_12_menit_ts: [/\blari\s*12\s*menit\b.*\bts\b/, /\blari12\b.*\bts\b/],
+    lari_12_menit_rs: [/\blari\s*12\s*menit\b.*\brs\b/, /\blari12\b.*\brs\b/],
 
-    sit_up_ts: [/^sit\s*up\s*ts$/, /^situp\s*ts$/, /^sit\s*up\s*\(ts\)$/],
-    sit_up_rs: [/^sit\s*up\s*rs$/, /^situp\s*rs$/, /^sit\s*up\s*\(rs\)$/],
+    // Sit up
+    sit_up_ts: [/\bsit\s*up\b.*\bts\b/, /\bsitup\b.*\bts\b/],
+    sit_up_rs: [/\bsit\s*up\b.*\brs\b/, /\bsitup\b.*\brs\b/],
 
-    shuttle_run_ts: [
-      /^shuttle\s*run\s*ts$/,
-      /^shuttlerun\s*ts$/,
-      /^shuttle\s*run\s*\(ts\)$/,
-    ],
-    shuttle_run_rs: [
-      /^shuttle\s*run\s*rs$/,
-      /^shuttlerun\s*rs$/,
-      /^shuttle\s*run\s*\(rs\)$/,
-    ],
+    // Shuttle run
+    shuttle_run_ts: [/\bshuttle\s*run\b.*\bts\b/, /\bshuttlerun\b.*\bts\b/],
+    shuttle_run_rs: [/\bshuttle\s*run\b.*\brs\b/, /\bshuttlerun\b.*\brs\b/],
 
-    push_up_ts: [/^push\s*up\s*ts$/, /^pushup\s*ts$/, /^push\s*up\s*\(ts\)$/],
-    push_up_rs: [/^push\s*up\s*rs$/, /^pushup\s*rs$/, /^push\s*up\s*\(rs\)$/],
+    // Push up
+    push_up_ts: [/\bpush\s*up\b.*\bts\b/, /\bpushup\b.*\bts\b/],
+    push_up_rs: [/\bpush\s*up\b.*\brs\b/, /\bpushup\b.*\brs\b/],
 
+    // Pull up / chinning
     pull_up_ts: [
-      /^pull\s*up\s*ts$/,
-      /^pullup\s*ts$/,
-      /^pull\s*up\s*\(ts\)$/,
-      /^chinning\s*ts$/,
+      /\bpull\s*up\b.*\bts\b/,
+      /\bpullup\b.*\bts\b/,
+      /\bchinning\b.*\bts\b/,
     ],
     pull_up_rs: [
-      /^pull\s*up\s*rs$/,
-      /^pullup\s*rs$/,
-      /^pull\s*up\s*\(rs\)$/,
-      /^chinning\s*rs$/,
+      /\bpull\s*up\b.*\brs\b/,
+      /\bpullup\b.*\brs\b/,
+      /\bchinning\b.*\brs\b/,
     ],
 
-    nilai_akhir: [/^nilai\s*akhir$/, /^total$/, /^nilai$/],
+    // Nilai akhir: prioritaskan "RATA NILAI A+B", lalu "RATA NILAI B", lalu fallback umum
+    nilai_akhir: [
+      /\brata\s*nilai\s*a\s*b\b/, // "RATA NILAI A+B" -> norm: "rata nilai a b"
+      /\brata\s*nilai\s*b\b/, // "RATA NILAI B"
+      /\bnilai\s*akhir\b/, // "NILAI AKHIR"
+      /^\btotal\b$/, // "TOTAL"
+      /^\bnilai\b$/, // "NILAI"
+    ],
+
     keterangan: [/^keterangan$/, /^ket$/],
   };
 
   function findOne(regexList) {
     for (const { raw, key } of headers) {
-      for (const rx of regexList) {
-        if (rx.test(key)) return raw;
-      }
+      for (const rx of regexList) if (rx.test(key)) return raw;
     }
     return null;
   }
 
   const map = {};
-  for (const k of Object.keys(want)) {
-    map[k] = findOne(want[k]);
+  for (const k of Object.keys(want)) map[k] = findOne(want[k]);
+
+  if (process.env.NODE_ENV === "development") {
+    console.log("[detectColumns] raw:", headersRaw);
+    console.log(
+      "[detectColumns] norm:",
+      headers.map((h) => h.key)
+    );
+    console.log("[detectColumns] map:", map);
   }
+
   return map;
 }
 
-// cache siswa_id by nosis/nama
+// Cache siswa_id by nosis/nama
 async function resolveSiswaId(client, nosis, nama, caches) {
   const { byNosis, byNama } = caches;
   if (nosis) {
@@ -115,6 +125,11 @@ async function resolveSiswaId(client, nosis, nama, caches) {
   return null;
 }
 
+/* =========================================================
+ * POST /import/jasmani_polda?tahap=1&dryRun=true
+ * Body: multipart/form-data (file field: "file")
+ * Sheet wajib: "REKAP"
+ * ========================================================= */
 exports.importExcel = async (req, res) => {
   if (!req.file)
     return res
@@ -122,7 +137,7 @@ exports.importExcel = async (req, res) => {
       .json({ ok: false, message: "File (field: file) wajib" });
 
   const filePath = req.file.path;
-  const tahap = Number.parseInt(req.query.tahap || "1", 10) || null;
+  const tahapQuery = toInt(req.query.tahap || null); // default tahap dari query
 
   const client = await pool.connect();
   try {
@@ -154,6 +169,16 @@ exports.importExcel = async (req, res) => {
       });
     }
 
+    // (opsional) warning
+    if (!cols.nilai_akhir) {
+      console.warn(
+        "[importExcel] Kolom Nilai Akhir (contoh: 'RATA NILAI A+B') tidak terdeteksi"
+      );
+    }
+    if (!cols.lari_12_menit_ts && !cols.lari_12_menit_rs) {
+      console.warn("[importExcel] Kolom Lari 12 Menit TS/RS tidak terdeteksi");
+    }
+
     let inserted = 0,
       updated = 0,
       skipped = 0;
@@ -179,7 +204,11 @@ exports.importExcel = async (req, res) => {
         continue;
       }
 
-      // payload: gunakan nama field yang SAMA dengan kolom di DB
+      // tahap per baris (kolom) > query > null
+      const tahapCell = cols.tahap ? raw[cols.tahap] : null;
+      const tahap = toInt(tahapCell) ?? tahapQuery ?? null;
+
+      // payload sesuai kolom DB
       const payload = {
         siswa_id,
         nosis: nosis ? String(nosis) : null,
@@ -315,11 +344,16 @@ exports.importExcel = async (req, res) => {
 };
 
 /* =========================================================
- * GET /jasmani/template?angkatan=55
+ * GET /jasmani/template?angkatan=55&tahap=1
+ *  - Sheet: REKAP
+ *  - Header menyertakan kolom TAHAP
+ *  - Jika ?tahap=... dikirim, isi default kolom TAHAP
  * ========================================================= */
 exports.template = async (req, res) => {
   try {
     const angkatan = (req.query.angkatan || "").trim();
+    const tahapDefault = toInt(req.query.tahap || null);
+
     const params = [];
     let where = "WHERE 1=1";
     if (angkatan) {
@@ -335,6 +369,7 @@ exports.template = async (req, res) => {
     const data = [
       [
         "NOSIS",
+        "TAHAP",
         "LARI 12 MENIT (TS)",
         "LARI 12 MENIT (RS)",
         "SIT UP (TS)",
@@ -345,23 +380,25 @@ exports.template = async (req, res) => {
         "PUSH UP (RS)",
         "PULL UP (TS)",
         "PULL UP (RS)",
-        "NILAI AKHIR",
+        // nilai_akhir akan diisi operator sebagai "RATA NILAI A+B" di template lapangan
+        "RATA NILAI A+B",
         "KETERANGAN",
       ],
       ...rows.map((r) => [
         r.nosis || "",
+        tahapDefault ?? "",
         "",
-        "", // lari TS/RS
+        "", // lari RS/TS (lokasi kolom disesuaikan pengguna)
         "",
-        "", // sit up TS/RS
         "",
-        "", // shuttle run TS/RS
         "",
-        "", // push up TS/RS
         "",
-        "", // pull up TS/RS
-        "", // nilai akhir
-        "", // keterangan
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
       ]),
     ];
 
@@ -372,7 +409,7 @@ exports.template = async (req, res) => {
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
     const fname = `Template_Jasmani_REKAP${
       angkatan ? `_Angkatan_${angkatan}` : ""
-    }.xlsx`;
+    }${tahapDefault != null ? `_Tahap_${tahapDefault}` : ""}.xlsx`;
 
     res.setHeader(
       "Content-Type",
@@ -387,8 +424,8 @@ exports.template = async (req, res) => {
 };
 
 /* =========================================================
- * GET /jasmani/rekap?q=&angkatan=&tahap=
- *   — Tambah RANK (global/batalion/kompi/pleton) berdasar nilai_akhir
+ * GET /jasmani/rekap?q=&angkatan=&tahap=&page=&limit=&sort_by=&sort_dir=
+ *   — Termasuk ranking (global/batalion/kompi/pleton) berdasar nilai_akhir
  * ========================================================= */
 exports.rekap = async (req, res) => {
   try {
@@ -434,9 +471,8 @@ exports.rekap = async (req, res) => {
     );
     const total = cnt?.[0]?.total ?? 0;
 
-    // --------- SQL rekap + ranking (mirip mapel.rekap)
+    // --------- SQL rekap + ranking
     const pageSql = `
-      /* all_match: semua siswa (tanpa limit) utk basis ranking */
       WITH all_match AS (
         SELECT
           s.id, s.nosis, s.nama, s.kelompok_angkatan, s.batalion, s.ton,
@@ -447,7 +483,6 @@ exports.rekap = async (req, res) => {
         FROM siswa s
         ${where}
       ),
-      /* pilih satu baris jasmani_spn per siswa untuk ranking */
       all_chosen AS (
         ${
           tahap !== null
@@ -505,14 +540,12 @@ exports.rekap = async (req, res) => {
         `
         }
       ),
-      /* basis ranking pakai nilai_akhir dari all_chosen */
       rank_base AS (
         SELECT
           am.id,
           am.batalion,
           am.kompi,
           am.pleton,
-          /* skor ranking: nilai_akhir (numeric) */
           CASE
             WHEN ac.nilai_akhir IS NOT NULL THEN ac.nilai_akhir::numeric
             ELSE NULL::numeric
@@ -533,7 +566,6 @@ exports.rekap = async (req, res) => {
           (RANK() OVER (PARTITION BY kompi, pleton ORDER BY score DESC NULLS LAST))                                  AS rank_pleton
         FROM rank_base rb
       ),
-      /* subset page (limit/offset + order) */
       match AS (
         SELECT * FROM all_match
         ORDER BY ${sortBy} ${sortDir}

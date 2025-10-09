@@ -6,20 +6,39 @@ const pool = require("../db/pool");
 
 // ---------------- helpers ----------------
 const toNum = (v) => {
-  if (v == null || v === "") return null;
-  const f = parseFloat(String(v).replace(",", "."));
+  if (v == null) return null;
+  // buang spasi & karakter non-angka umum, biarkan tanda minus & koma/titik
+  const s = String(v).trim();
+  if (s === "" || /^[-–—\s]+$/.test(s)) return null;
+  // jika ada huruf (mis. "MS", "KS") anggap bukan angka
+  if (/[A-Za-z]/.test(s)) return null;
+  // normalisasi koma -> titik
+  const f = parseFloat(s.replace(",", "."));
   return Number.isFinite(f) ? f : null;
 };
 
+// Normalizer: rapikan header agar regex stabil
 const normKey = (s) => {
   let x = String(s || "")
-    .replace(/[\r\n]+/g, " ")
-    .replace(/["'`]+/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[\r\n]+/g, " ") // baris baru -> spasi
+    .replace(/["'`]+/g, " ") // kutip -> spasi
+    .replace(/\s+/g, " ") // multi spasi -> 1 spasi
     .trim()
     .toLowerCase();
+
+  // normalisasi simbol plus/×/x
+  x = x.replace(/[×x]/g, "x");
+  x = x.replace(/\+\s*/g, "+"); // "A + B" -> "A+B"
+
+  // hapus akhiran indeks excel duplikat header
   x = x.replace(/(?:__+\d+|_\d+|\s+\d+)$/g, "");
-  x = x.replace(/[^\w\sx×]/g, "");
+
+  // buang karakter non-kata kecuali spasi, plus, x
+  x = x.replace(/[^\w\s+]/g, "");
+
+  // betulkan salah tik umum
+  x = x.replace(/\btibuh\b/g, "tubuh"); // "tibuh" -> "tubuh"
+
   return x.trim();
 };
 
@@ -27,55 +46,12 @@ function detectColumns(headersRaw) {
   const headers = headersRaw.map((h) => {
     const raw = h;
     const key = normKey(h);
+    // base: tanpa angka di ujung (sudah ditangani di normKey, tapi keep)
     const base = key.replace(/(?:__+\d+|_\d+|\s+\d+)$/g, "");
     return { raw, key, base };
   });
 
-  const want = {
-    // identitas
-    no_panda: [/^no\s*panda$/],
-    nama: [/^nama$/],
-    jenis_kelamin: [/^(jk|jenis\s*kelamin)$/],
-    jalur_seleksi: [/^jalur\s*seleksi$/],
-    angkatan: [/^angkatan$/],
-
-    // antropometri (angka & teks)
-    tb_cm: [/^(tb|tinggi(?:\s*badan)?)\s*cm$/],
-    bb_kg: [/^(bb|berat(?:\s*badan)?)\s*kg$/],
-    ratio_index: [/^ratio\s*index$/],
-    somato_type: [/^somato\s*type$/],
-    klasifikasi_tipe_tubuh: [/^klasifikasi\s*tipe\s*tubuh$/],
-    nilai_tipe_tubuh: [/^nilai\s*tipe\s*tubuh$/],
-    nilai_kelainan: [/^nilai\s*kelainan$/],
-    nilai_terkecil: [/^nilai\s*terkecil$/],
-    nilai_anthro: [/^nilai\s*anthro$/], // angka
-    antro: [/^antro$/], // angka (rekap)
-    antro_text: [/^antro\s*pembobotan$/], // teks kategori
-    pencapaian_nbl: [/^pencapaian\s*nbl$/],
-
-    // kesamaptaan & renang
-    lari_12_menit: [/^lari\s*12\s*menit$|^kesamaptaan\s*a$/],
-    pull_up_chinning: [/^pull\s*up\s*chinning$|^pull\s*up$|^chinning$/],
-    sit_up: [/^sit\s*up$/],
-    push_up: [/^push\s*up$/],
-    shuttle_run: [/^shuttle\s*run$/],
-    renang: [/^renang$/],
-
-    // rekap
-    nilai_b: [/^nilai\s*b$/],
-    na_a_b: [/^na\s*a\+b$/],
-    renang_x20: [/^renang\s*(x|×)\s*20$/],
-    samapta_x80: [/^(samapta|kesamaptaan)\s*(x|×)\s*80$/],
-    nilai_akhir: [/^nilai\s*akhir$|^total$|^nilai$/],
-    ktgr: [/^ktgr$|^kategori$/],
-    ket: [/^ket(eran)?$/],
-    catatan: [/^catatan$/],
-    paraf: [/^paraf$/],
-
-    // optional mapper
-    nosis: [/^nosis$|^no\s*sis$|^no\s*induk$/],
-  };
-
+  // Helper cari satu header yang match daftar regex
   function findOne(regexList) {
     for (const h of headers) {
       for (const rx of regexList) {
@@ -84,6 +60,81 @@ function detectColumns(headersRaw) {
     }
     return null;
   }
+
+  const want = {
+    // identitas
+    no_panda: [/^no\s*panda$/],
+    nama: [/^nama$/],
+    jenis_kelamin: [/^(jk|jenis\s*kelamin)$/],
+    jalur_seleksi: [/^jalur\s*seleksi$/],
+    angkatan: [/^angkatan$/],
+    nosis: [/^nosis$|^no\s*sis$|^no\s*induk$/],
+
+    // antropometri (angka & teks)
+    tb_cm: [/^(tb|tinggi(?:\s*badan)?)\s*cm$/],
+    bb_kg: [/^(bb|berat(?:\s*badan)?)\s*kg$/],
+    ratio_index: [/^ratio\s*index$/],
+    somato_type: [/^somato\s*type$/],
+    // akui kedua ejaan: "tubuh" & salah tik "tibuh"
+    klasifikasi_tipe_tubuh: [
+      /^klasifikasi\s*tipe\s*tubuh$/,
+      /^klasifikasi\s*tipe\s*tibuh$/,
+    ],
+    nilai_tipe_tubuh: [/^nilai\s*tipe\s*tubuh$/],
+    nilai_kelainan: [/^nilai\s*kelainan$/],
+    nilai_terkecil: [/^nilai\s*terkecil$/],
+    nilai_anthro: [/^nilai\s*anthro$/], // angka
+    // ANTHRO PEMBOBOTAN → simpan sebagai teks kategori
+    antro_text: [/^anthro\s*pembobotan$|^antro\s*pembobotan$|^antro$/],
+    pencapaian_nbl: [/^pencapaian\s*nbl$/],
+
+    // kesamaptaan & renang
+    // kolom label baru (teks) + angka pendamping jika ada
+    kesamaptaan_hga: [/^kesamaptaan\s*hga$/],
+    kesamaptaan_nga: [/^kesamaptaan\s*nga$/],
+    kesamaptaan_hga_num: [/^hga\s*\(?num\)?$|^hga\s*nilai$/],
+    kesamaptaan_nga_num: [/^nga\s*\(?num\)?$|^nga\s*nilai$/],
+
+    // per komponen (HGB/NGB) — angka
+    pull_up_hgb1: [/^pull\s*up\s*hgb1$/],
+    pull_up_ngb1: [/^pull\s*up\s*ngb1$/],
+    sit_up_hgb2: [/^sit\s*up\s*hgb2$/],
+    sit_up_ngb2: [/^sit\s*up\s*ngb2$/],
+    push_up_hgb3: [/^push\s*up\s*hgb3$/],
+    push_up_ngb3: [/^push\s*up\s*ngb3$/],
+    shuttle_run_hgb4: [/^shuttle\s*run\s*hgb4$/],
+    shuttle_run_ngb4: [/^shuttle\s*run\s*ngb4$/],
+
+    // fallback nilai gabungan lama
+    pull_up_chinning: [/^pull\s*up\s*chinning$|^pull\s*up$|^chinning$/],
+    sit_up: [/^sit\s*up$/],
+    push_up: [/^push\s*up$/],
+    shuttle_run: [/^shuttle\s*run$/],
+    renang: [/^renang(\s*nilai)?$/],
+
+    // rekap
+    nilai_b: [/^nilai\s*b$/],
+
+    // ——— NA A+B: akui banyak variasi (spasi/plus/kutip/“nilai”/“kesamaptaan”) ———
+    na_a_b: [
+      /^na\s*a\+b$/, // "na a+b"
+      /^na\s*a\s*\+\s*b$/, // "na a + b"
+      /^na\s*a\s*b$/, // "na a b" (tanpa plus)
+      /^nilai\s*a\+b$/, // "nilai a+b"
+      /^nilai\s*a\s*\+\s*b$/, // "nilai a + b"
+      /^kesamaptaan\s*a\+b$/, // "kesamaptaan a+b"
+      /^kesamaptaan\s*a\s*\+\s*b$/, // "kesamaptaan a + b"
+      /^na\s*a\b.*\bb$/, // toleran sisa karakter (kuot/garis)
+    ],
+
+    renang_x20: [/^renang\s*x\s*20$/],
+    samapta_x80: [/^(samapta|kesamaptaan)\s*x\s*80$/],
+    nilai_akhir: [/^nilai\s*akhir$|^total$|^nilai$/],
+    ktgr: [/^ktgr$|^kategori$/],
+    ket: [/^ket(eran)?$/],
+    catatan: [/^catatan$/],
+    paraf: [/^paraf$/],
+  };
 
   const map = {};
   for (const k of Object.keys(want)) {
@@ -112,16 +163,13 @@ async function resolveSiswaId(client, nosis, nama) {
   return null;
 }
 
-// ✅ FIX: cast parameter ke text & gunakan COALESCE agar tipe jelas
+// Lebih toleran pada upsert berdasar (no_panda, angkatan) atau nama
 async function findExistingRowId(client, payload) {
   if (payload.no_panda) {
     const r = await client.query(
       `SELECT id FROM jasmani_polda
        WHERE TRIM(COALESCE(no_panda,'')) = TRIM($1::text)
-         AND (
-           COALESCE($2::text,'') = '' OR
-           TRIM(COALESCE(angkatan,'')) = TRIM($2::text)
-         )
+         AND (COALESCE($2::text,'') = '' OR TRIM(COALESCE(angkatan,'')) = TRIM($2::text))
        ORDER BY updated_at DESC
        LIMIT 1`,
       [payload.no_panda, payload.angkatan]
@@ -132,10 +180,7 @@ async function findExistingRowId(client, payload) {
     const r = await client.query(
       `SELECT id FROM jasmani_polda
        WHERE LOWER(TRIM(COALESCE(nama,''))) = LOWER(TRIM($1::text))
-         AND (
-           COALESCE($2::text,'') = '' OR
-           TRIM(COALESCE(angkatan,'')) = TRIM($2::text)
-         )
+         AND (COALESCE($2::text,'') = '' OR TRIM(COALESCE(angkatan,'')) = TRIM($2::text))
        ORDER BY updated_at DESC
        LIMIT 1`,
       [payload.nama, payload.angkatan]
@@ -146,7 +191,6 @@ async function findExistingRowId(client, payload) {
 }
 
 // ============================ CONTROLLERS ===============================
-
 exports.importExcel = async (req, res) => {
   if (!req.file) {
     return res
@@ -239,17 +283,47 @@ exports.importExcel = async (req, res) => {
           cols.nilai_terkecil ? raw[cols.nilai_terkecil] : null
         ),
         nilai_anthro: toNum(cols.nilai_anthro ? raw[cols.nilai_anthro] : null),
-        antro: toNum(cols.antro ? raw[cols.antro] : null),
+
+        // antro_text (kategori/huruf)
         antro_text: cols.antro_text
           ? String(raw[cols.antro_text] ?? "").trim()
           : null,
+        // optional sheet yang menuliskan "ANTRO" sebagai angka → taruh ke nilai_anthro bila ada
+        ...(cols.antro && !cols.nilai_anthro
+          ? { nilai_anthro: toNum(raw[cols.antro]) }
+          : {}),
+
         pencapaian_nbl: cols.pencapaian_nbl
           ? String(raw[cols.pencapaian_nbl] ?? "").trim()
           : null,
 
-        lari_12_menit: toNum(
-          cols.lari_12_menit ? raw[cols.lari_12_menit] : null
+        kesamaptaan_hga: cols.kesamaptaan_hga
+          ? String(raw[cols.kesamaptaan_hga] ?? "").trim() || null
+          : null,
+        kesamaptaan_nga: cols.kesamaptaan_nga
+          ? String(raw[cols.kesamaptaan_nga] ?? "").trim() || null
+          : null,
+        kesamaptaan_hga_num: toNum(
+          cols.kesamaptaan_hga_num ? raw[cols.kesamaptaan_hga_num] : null
         ),
+        kesamaptaan_nga_num: toNum(
+          cols.kesamaptaan_nga_num ? raw[cols.kesamaptaan_nga_num] : null
+        ),
+
+        pull_up_hgb1: toNum(cols.pull_up_hgb1 ? raw[cols.pull_up_hgb1] : null),
+        pull_up_ngb1: toNum(cols.pull_up_ngb1 ? raw[cols.pull_up_ngb1] : null),
+        sit_up_hgb2: toNum(cols.sit_up_hgb2 ? raw[cols.sit_up_hgb2] : null),
+        sit_up_ngb2: toNum(cols.sit_up_ngb2 ? raw[cols.sit_up_ngb2] : null),
+        push_up_hgb3: toNum(cols.push_up_hgb3 ? raw[cols.push_up_hgb3] : null),
+        push_up_ngb3: toNum(cols.push_up_ngb3 ? raw[cols.push_up_ngb3] : null),
+        shuttle_run_hgb4: toNum(
+          cols.shuttle_run_hgb4 ? raw[cols.shuttle_run_hgb4] : null
+        ),
+        shuttle_run_ngb4: toNum(
+          cols.shuttle_run_ngb4 ? raw[cols.shuttle_run_ngb4] : null
+        ),
+
+        // fallback gabungan lama
         pull_up_chinning: toNum(
           cols.pull_up_chinning ? raw[cols.pull_up_chinning] : null
         ),
@@ -259,7 +333,10 @@ exports.importExcel = async (req, res) => {
         renang: toNum(cols.renang ? raw[cols.renang] : null),
 
         nilai_b: toNum(cols.nilai_b ? raw[cols.nilai_b] : null),
+
+        // NA A+B — sekarang match banyak variasi header
         na_a_b: toNum(cols.na_a_b ? raw[cols.na_a_b] : null),
+
         renang_x20: toNum(cols.renang_x20 ? raw[cols.renang_x20] : null),
         samapta_x80: toNum(cols.samapta_x80 ? raw[cols.samapta_x80] : null),
         nilai_akhir: toNum(cols.nilai_akhir ? raw[cols.nilai_akhir] : null),
@@ -282,47 +359,60 @@ exports.importExcel = async (req, res) => {
 
       if (existingId) {
         const q = `UPDATE jasmani_polda SET
-          siswa_id = COALESCE($1, siswa_id),
-          no_panda = COALESCE($2, no_panda),
-          nama = COALESCE($3, nama),
-          jenis_kelamin = COALESCE($4, jenis_kelamin),
-          jalur_seleksi = COALESCE($5, jalur_seleksi),
+  siswa_id = COALESCE($1, siswa_id),
+  no_panda = COALESCE($2, no_panda),
+  nama = COALESCE($3, nama),
+  jenis_kelamin = COALESCE($4, jenis_kelamin),
+  jalur_seleksi = COALESCE($5, jalur_seleksi),
 
-          tb_cm = COALESCE($6, tb_cm),
-          bb_kg = COALESCE($7, bb_kg),
-          ratio_index = COALESCE($8, ratio_index),
-          somato_type = COALESCE($9, somato_type),
-          klasifikasi_tipe_tubuh = COALESCE($10, klasifikasi_tipe_tubuh),
-          nilai_tipe_tubuh = COALESCE($11, nilai_tipe_tubuh),
-          nilai_kelainan = COALESCE($12, nilai_kelainan),
-          nilai_terkecil = COALESCE($13, nilai_terkecil),
-          nilai_anthro = COALESCE($14, nilai_anthro),
-          antro = COALESCE($15, antro),
-          antro_text = COALESCE($16, antro_text),
-          pencapaian_nbl = COALESCE($17, pencapaian_nbl),
+  tb_cm = COALESCE($6, tb_cm),
+  bb_kg = COALESCE($7, bb_kg),
+  ratio_index = COALESCE($8, ratio_index),
+  somato_type = COALESCE($9, somato_type),
+  klasifikasi_tipe_tubuh = COALESCE($10, klasifikasi_tipe_tubuh),
+  nilai_tipe_tubuh = COALESCE($11, nilai_tipe_tubuh),
+  nilai_kelainan = COALESCE($12, nilai_kelainan),
+  nilai_terkecil = COALESCE($13, nilai_terkecil),
+  nilai_anthro = COALESCE($14, nilai_anthro),
+  antro_text = COALESCE($15, antro_text),
+  pencapaian_nbl = COALESCE($16, pencapaian_nbl),
 
-          lari_12_menit = COALESCE($18, lari_12_menit),
-          pull_up_chinning = COALESCE($19, pull_up_chinning),
-          sit_up = COALESCE($20, sit_up),
-          push_up = COALESCE($21, push_up),
-          shuttle_run = COALESCE($22, shuttle_run),
-          renang = COALESCE($23, renang),
+  /* ⬇️ mulai dari $17 (tanpa bolong) */
+  kesamaptaan_hga = COALESCE($17, kesamaptaan_hga),
+  kesamaptaan_nga = COALESCE($18, kesamaptaan_nga),
+  kesamaptaan_hga_num = COALESCE($19, kesamaptaan_hga_num),
+  kesamaptaan_nga_num = COALESCE($20, kesamaptaan_nga_num),
 
-          nilai_b = COALESCE($24, nilai_b),
-          na_a_b = COALESCE($25, na_a_b),
-          renang_x20 = COALESCE($26, renang_x20),
-          samapta_x80 = COALESCE($27, samapta_x80),
-          nilai_akhir = COALESCE($28, nilai_akhir),
-          ktgr = COALESCE($29, ktgr),
-          ket = COALESCE($30, ket),
-          catatan = COALESCE($31, catatan),
-          paraf = COALESCE($32, paraf),
+  pull_up_hgb1 = COALESCE($21, pull_up_hgb1),
+  pull_up_ngb1 = COALESCE($22, pull_up_ngb1),
+  sit_up_hgb2 = COALESCE($23, sit_up_hgb2),
+  sit_up_ngb2 = COALESCE($24, sit_up_ngb2),
+  push_up_hgb3 = COALESCE($25, push_up_hgb3),
+  push_up_ngb3 = COALESCE($26, push_up_ngb3),
+  shuttle_run_hgb4 = COALESCE($27, shuttle_run_hgb4),
+  shuttle_run_ngb4 = COALESCE($28, shuttle_run_ngb4),
 
-          angkatan = COALESCE($33, angkatan),
-          sheet_name = COALESCE($34, sheet_name),
-          sumber_file = COALESCE($35, sumber_file),
-          updated_at = NOW()
-        WHERE id = $36`;
+  pull_up_chinning = COALESCE($29, pull_up_chinning),
+  sit_up = COALESCE($30, sit_up),
+  push_up = COALESCE($31, push_up),
+  shuttle_run = COALESCE($32, shuttle_run),
+  renang = COALESCE($33, renang),
+
+  nilai_b = COALESCE($34, nilai_b),
+  na_a_b = COALESCE($35, na_a_b),
+  renang_x20 = COALESCE($36, renang_x20),
+  samapta_x80 = COALESCE($37, samapta_x80),
+  nilai_akhir = COALESCE($38, nilai_akhir),
+  ktgr = COALESCE($39, ktgr),
+  ket = COALESCE($40, ket),
+  catatan = COALESCE($41, catatan),
+  paraf = COALESCE($42, paraf),
+
+  angkatan = COALESCE($43, angkatan),
+  sheet_name = COALESCE($44, sheet_name),
+  sumber_file = COALESCE($45, sumber_file),
+  updated_at = NOW()
+WHERE id = $46`;
         await client.query(q, [
           payload.siswa_id,
           payload.no_panda,
@@ -339,11 +429,23 @@ exports.importExcel = async (req, res) => {
           payload.nilai_kelainan,
           payload.nilai_terkecil,
           payload.nilai_anthro,
-          payload.antro,
           payload.antro_text,
           payload.pencapaian_nbl,
 
-          payload.lari_12_menit,
+          payload.kesamaptaan_hga,
+          payload.kesamaptaan_nga,
+          payload.kesamaptaan_hga_num,
+          payload.kesamaptaan_nga_num,
+
+          payload.pull_up_hgb1,
+          payload.pull_up_ngb1,
+          payload.sit_up_hgb2,
+          payload.sit_up_ngb2,
+          payload.push_up_hgb3,
+          payload.push_up_ngb3,
+          payload.shuttle_run_hgb4,
+          payload.shuttle_run_ngb4,
+
           payload.pull_up_chinning,
           payload.sit_up,
           payload.push_up,
@@ -370,17 +472,22 @@ exports.importExcel = async (req, res) => {
         const q = `INSERT INTO jasmani_polda (
           siswa_id, no_panda, nama, jenis_kelamin, jalur_seleksi,
           tb_cm, bb_kg, ratio_index, somato_type, klasifikasi_tipe_tubuh,
-          nilai_tipe_tubuh, nilai_kelainan, nilai_terkecil, nilai_anthro, antro, antro_text, pencapaian_nbl,
-          lari_12_menit, pull_up_chinning, sit_up, push_up, shuttle_run, renang,
+          nilai_tipe_tubuh, nilai_kelainan, nilai_terkecil, nilai_anthro, antro_text, pencapaian_nbl,
+          kesamaptaan_hga, kesamaptaan_nga, kesamaptaan_hga_num, kesamaptaan_nga_num,
+          pull_up_hgb1, pull_up_ngb1, sit_up_hgb2, sit_up_ngb2, push_up_hgb3, push_up_ngb3, shuttle_run_hgb4, shuttle_run_ngb4,
+          pull_up_chinning, sit_up, push_up, shuttle_run, renang,
           nilai_b, na_a_b, renang_x20, samapta_x80, nilai_akhir, ktgr, ket, catatan, paraf,
           angkatan, sheet_name, sumber_file
         ) VALUES (
           $1,$2,$3,$4,$5,
           $6,$7,$8,$9,$10,
-          $11,$12,$13,$14,$15,$16,$17,
-          $18,$19,$20,$21,$22,$23,
-          $24,$25,$26,$27,$28,$29,$30,$31,$32,
-          $33,$34,$35
+          $11,$12,$13,$14,$15,$16,
+          $17,
+          $18,$19,$20,$21,
+          $22,$23,$24,$25,$26,$27,$28,$29,
+          $30,$31,$32,$33,$34,
+          $35,$36,$37,$38,$39,$40,$41,$42,$43,
+          $44,$45
         )`;
         await client.query(q, [
           payload.siswa_id,
@@ -398,11 +505,23 @@ exports.importExcel = async (req, res) => {
           payload.nilai_kelainan,
           payload.nilai_terkecil,
           payload.nilai_anthro,
-          payload.antro,
           payload.antro_text,
           payload.pencapaian_nbl,
 
-          payload.lari_12_menit,
+          payload.kesamaptaan_hga,
+          payload.kesamaptaan_nga,
+          payload.kesamaptaan_hga_num,
+          payload.kesamaptaan_nga_num,
+
+          payload.pull_up_hgb1,
+          payload.pull_up_ngb1,
+          payload.sit_up_hgb2,
+          payload.sit_up_ngb2,
+          payload.push_up_hgb3,
+          payload.push_up_ngb3,
+          payload.shuttle_run_hgb4,
+          payload.shuttle_run_ngb4,
+
           payload.pull_up_chinning,
           payload.sit_up,
           payload.push_up,
@@ -446,7 +565,7 @@ exports.importExcel = async (req, res) => {
   }
 };
 
-// GET /jasmani-polda/rekap?q=&angkatan=&page=&limit=&sort_by=&sort_dir=
+// GET /jasmani-polda/rekap
 exports.rekap = async (req, res) => {
   try {
     const q = (req.query.q || "").trim().toLowerCase();
@@ -515,11 +634,29 @@ exports.rekap = async (req, res) => {
       nilai_terkecil:
         r.nilai_terkecil == null ? null : Number(r.nilai_terkecil),
       nilai_anthro: r.nilai_anthro == null ? null : Number(r.nilai_anthro),
-      antro: r.antro == null ? null : Number(r.antro),
+
       antro_text: r.antro_text || null,
       pencapaian_nbl: r.pencapaian_nbl,
 
-      lari_12_menit: r.lari_12_menit == null ? null : Number(r.lari_12_menit),
+      kesamaptaan_hga: r.kesamaptaan_hga || null,
+      kesamaptaan_nga: r.kesamaptaan_nga || null,
+      kesamaptaan_hga_num:
+        r.kesamaptaan_hga_num == null ? null : Number(r.kesamaptaan_hga_num),
+      kesamaptaan_nga_num:
+        r.kesamaptaan_nga_num == null ? null : Number(r.kesamaptaan_nga_num),
+
+      pull_up_hgb1: r.pull_up_hgb1 == null ? null : Number(r.pull_up_hgb1),
+      pull_up_ngb1: r.pull_up_ngb1 == null ? null : Number(r.pull_up_ngb1),
+      sit_up_hgb2: r.sit_up_hgb2 == null ? null : Number(r.sit_up_hgb2),
+      sit_up_ngb2: r.sit_up_ngb2 == null ? null : Number(r.sit_up_ngb2),
+      push_up_hgb3: r.push_up_hgb3 == null ? null : Number(r.push_up_hgb3),
+      push_up_ngb3: r.push_up_ngb3 == null ? null : Number(r.push_up_ngb3),
+      shuttle_run_hgb4:
+        r.shuttle_run_hgb4 == null ? null : Number(r.shuttle_run_hgb4),
+      shuttle_run_ngb4:
+        r.shuttle_run_ngb4 == null ? null : Number(r.shuttle_run_ngb4),
+
+      // fallback gabungan
       pull_up_chinning:
         r.pull_up_chinning == null ? null : Number(r.pull_up_chinning),
       sit_up: r.sit_up == null ? null : Number(r.sit_up),
@@ -558,5 +695,75 @@ exports.rekap = async (req, res) => {
     res
       .status(500)
       .json({ ok: false, message: "Gagal mengambil rekap jasmani POLDA" });
+  }
+};
+exports.setSiswa = async (req, res) => {
+  try {
+    const id = Number(req.params.id) || 0;
+    if (!id) {
+      return res.status(400).json({ ok: false, message: "ID tidak valid" });
+    }
+
+    // boleh null (hapus mapping), atau integer > 0 (set mapping)
+    const raw = (req.body && req.body.siswa_id) ?? null;
+    const siswa_id =
+      raw === null || raw === ""
+        ? null
+        : Number.isFinite(Number(raw))
+        ? Number(raw)
+        : NaN;
+
+    if (Number.isNaN(siswa_id)) {
+      return res
+        .status(400)
+        .json({ ok: false, message: "siswa_id harus angka atau null" });
+    }
+
+    // pastikan baris jasmani_polda ada
+    const { rowCount: existJP, rows: rowJP } = await pool.query(
+      `SELECT id, siswa_id FROM jasmani_polda WHERE id=$1 LIMIT 1`,
+      [id]
+    );
+    if (!existJP) {
+      return res
+        .status(404)
+        .json({ ok: false, message: "Data jasmani_polda tidak ditemukan" });
+    }
+
+    // jika set ke ID tertentu, pastikan siswa ada
+    if (siswa_id !== null) {
+      const { rowCount: existS } = await pool.query(
+        `SELECT 1 FROM siswa WHERE id=$1 LIMIT 1`,
+        [siswa_id]
+      );
+      if (!existS) {
+        return res
+          .status(404)
+          .json({ ok: false, message: "Siswa tidak ditemukan" });
+      }
+    }
+
+    // update mapping
+    const { rowCount, rows } = await pool.query(
+      `UPDATE jasmani_polda
+         SET siswa_id = $1,
+             updated_at = NOW()
+       WHERE id = $2
+       RETURNING id, siswa_id`,
+      [siswa_id, id]
+    );
+
+    if (!rowCount) {
+      return res
+        .status(500)
+        .json({ ok: false, message: "Gagal memperbarui siswa_id" });
+    }
+
+    return res.json({ ok: true, item: rows[0] });
+  } catch (e) {
+    console.error("[jasmani_polda.setSiswa]", e);
+    return res
+      .status(500)
+      .json({ ok: false, message: "Gagal mengubah mapping siswa" });
   }
 };

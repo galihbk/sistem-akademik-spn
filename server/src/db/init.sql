@@ -581,120 +581,158 @@ UNION ALL
 SELECT jasmani_spn_id, siswa_id, nosis, nama, kompi, pleton, tahap,
        'Pull Up (RS)', pull_up_rs::text, 'RS', keterangan, sumber_file, created_at, updated_at
 FROM ident;
---- ======================================================================
--- NILAI JASMANI POLDA (IMPORT-ONLY, TANPA JSONB)
+-- ======================================================================
+-- NILAI JASMANI POLDA (IMPORT-ONLY, TANPA JSONB) — REVISED
 -- ======================================================================
 
--- Pastikan helper updated_at ada (umumnya sudah didefinisikan di awal file)
-CREATE OR REPLACE FUNCTION set_updated_at()
-RETURNS trigger AS $$
-BEGIN
-  NEW.updated_at := NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- 1) Tabel utama (baru/pertahankan struktur)
 CREATE TABLE IF NOT EXISTS jasmani_polda (
-  id                  BIGSERIAL PRIMARY KEY,
+  id                    BIGSERIAL PRIMARY KEY,
+  siswa_id              INT NULL REFERENCES siswa(id) ON DELETE SET NULL,
 
-  -- mapping manual (opsional, boleh NULL saat import)
-  siswa_id            INT NULL REFERENCES siswa(id) ON DELETE SET NULL,
+  -- identitas
+  no_panda              TEXT,
+  nama                  TEXT,
+  jenis_kelamin         TEXT,
+  jalur_seleksi         TEXT,
+  angkatan              TEXT,
 
-  -- identitas baris dari Excel
-  no_panda            TEXT,             -- "PANDA" / "NO PANDA" di header
-  nama                TEXT,
-  jenis_kelamin       TEXT,             -- JK (L/P), disimpan ke jenis_kelamin
-  jalur_seleksi       TEXT,
-  angkatan            TEXT,             -- kunci upsert bareng no_panda
-
-  -- ANTHRO & deskriptif
-  tb_cm               NUMERIC(10,2),
-  bb_kg               NUMERIC(10,2),
-  ratio_index         TEXT,
-  somato_type         TEXT,
+  -- antropometri & deskriptif
+  tb_cm                 NUMERIC(10,2),
+  bb_kg                 NUMERIC(10,2),
+  ratio_index           TEXT,
+  somato_type           TEXT,
   klasifikasi_tipe_tubuh TEXT,
-  nilai_tipe_tubuh    NUMERIC(10,2),
-  nilai_kelainan      NUMERIC(10,2),
-  nilai_terkecil      NUMERIC(10,2),
-  nilai_anthro        NUMERIC(10,2),    -- angka
-  antro               TEXT,             -- huruf/grade
-  pencapaian_nbl      TEXT,
+  nilai_tipe_tubuh      NUMERIC(10,2),
+  nilai_kelainan        NUMERIC(10,2),
+  nilai_terkecil        NUMERIC(10,2),
+  nilai_anthro          NUMERIC(10,2),     -- angka
+  antro                 TEXT,              -- huruf/grade/rekap angka jadi label
+  antro_text            TEXT,              -- ANTHRO PEMBOBOTAN (teks)
+  pencapaian_nbl        TEXT,
 
-  -- RENANG (+ bobot x20) & KESAMAPTAAN A/B (single value)
-  renang              NUMERIC(10,2),
-  renang_x20          NUMERIC(10,2),
+  -- renang & samapta
+  renang                NUMERIC(10,2),
+  renang_x20            NUMERIC(10,2),
 
-  lari_12_menit       NUMERIC(10,2),    -- Kesamaptaan A
+  -- KESAMAPTAAN A (pengganti lari_12_menit)
+  kesamaptaan_hga       NUMERIC(10,2),
+  kesamaptaan_nga       NUMERIC(10,2),
 
-  pull_up_chinning    NUMERIC(10,2),    -- Kesamaptaan B
-  sit_up              NUMERIC(10,2),
-  push_up             NUMERIC(10,2),
-  shuttle_run         NUMERIC(10,2),
+  -- KESAMAPTAAN B (detail & generik)
+  pull_up_hgb1          NUMERIC(10,2),
+  pull_up_ngb1          NUMERIC(10,2),
+  sit_up_hgb2           NUMERIC(10,2),
+  sit_up_ngb2           NUMERIC(10,2),
+  push_up_hgb3          NUMERIC(10,2),
+  push_up_ngb3          NUMERIC(10,2),
+  shuttle_run_hgb4      NUMERIC(10,2),
+  shuttle_run_ngb4      NUMERIC(10,2),
 
-  -- Rekap
-  nilai_b             NUMERIC(10,2),
-  na_a_b              NUMERIC(10,2),    -- NA A+B
-  samapta_x80         NUMERIC(10,2),    -- SAMAPTA X80
-  nilai_akhir         NUMERIC(10,2),
-  ktgr                TEXT,
-  ket                 TEXT,
-  catatan             TEXT,
-  paraf               TEXT,
+  pull_up_chinning      NUMERIC(10,2),     -- generik (legacy) → diisi dari NGB1 jika ada
+  sit_up                NUMERIC(10,2),     -- generik (legacy) → NGB2
+  push_up               NUMERIC(10,2),     -- generik (legacy) → NGB3
+  shuttle_run           NUMERIC(10,2),     -- generik (legacy) → NGB4
 
-  -- metadata asal file
-  sumber_file         TEXT,
-  sheet_name          TEXT,
+  -- rekap
+  nilai_b               NUMERIC(10,2),
+  na_a_b                NUMERIC(10,2),     -- NA A+B
+  samapta_x80           NUMERIC(10,2),     -- SAMAPTA X80
+  nilai_akhir           NUMERIC(10,2),
+  ktgr                  TEXT,
+  ket                   TEXT,
+  catatan               TEXT,
+  paraf                 TEXT,
 
-  created_at          TIMESTAMP DEFAULT NOW(),
-  updated_at          TIMESTAMP DEFAULT NOW()
+  -- meta
+  sumber_file           TEXT,
+  sheet_name            TEXT,
+
+  created_at            TIMESTAMP DEFAULT NOW(),
+  updated_at            TIMESTAMP DEFAULT NOW()
 );
 
--- 2) Guard kolom (idempotent – aman bila tabel sudah ada versi lama)
+-- Sinkronisasi kolom (idempotent)
 ALTER TABLE jasmani_polda
-  ADD COLUMN IF NOT EXISTS siswa_id              INT,
-  ADD COLUMN IF NOT EXISTS no_panda              TEXT,
-  ADD COLUMN IF NOT EXISTS nama                  TEXT,
-  ADD COLUMN IF NOT EXISTS jenis_kelamin         TEXT,
-  ADD COLUMN IF NOT EXISTS jalur_seleksi         TEXT,
-  ADD COLUMN IF NOT EXISTS angkatan              TEXT,
+  ADD COLUMN IF NOT EXISTS siswa_id                INT,
+  ADD COLUMN IF NOT EXISTS no_panda                TEXT,
+  ADD COLUMN IF NOT EXISTS nama                    TEXT,
+  ADD COLUMN IF NOT EXISTS jenis_kelamin           TEXT,
+  ADD COLUMN IF NOT EXISTS jalur_seleksi           TEXT,
+  ADD COLUMN IF NOT EXISTS angkatan                TEXT,
 
-  ADD COLUMN IF NOT EXISTS tb_cm                 NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS bb_kg                 NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS ratio_index           TEXT,
-  ADD COLUMN IF NOT EXISTS somato_type           TEXT,
-  ADD COLUMN IF NOT EXISTS klasifikasi_tipe_tubuh TEXT,
-  ADD COLUMN IF NOT EXISTS nilai_tipe_tubuh      NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS nilai_kelainan        NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS nilai_terkecil        NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS nilai_anthro          NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS antro                 TEXT,
-  ADD COLUMN IF NOT EXISTS pencapaian_nbl        TEXT,
+  ADD COLUMN IF NOT EXISTS tb_cm                   NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS bb_kg                   NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS ratio_index             TEXT,
+  ADD COLUMN IF NOT EXISTS somato_type             TEXT,
+  ADD COLUMN IF NOT EXISTS klasifikasi_tipe_tubuh  TEXT,
+  ADD COLUMN IF NOT EXISTS nilai_tipe_tubuh        NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS nilai_kelainan          NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS nilai_terkecil          NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS nilai_anthro            NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS antro                   TEXT,
+  ADD COLUMN IF NOT EXISTS antro_text              TEXT,
+  ADD COLUMN IF NOT EXISTS pencapaian_nbl          TEXT,
 
-  ADD COLUMN IF NOT EXISTS renang                NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS renang_x20            NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS renang                  NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS renang_x20              NUMERIC(10,2),
 
-  ADD COLUMN IF NOT EXISTS lari_12_menit         NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS pull_up_chinning      NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS sit_up                NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS push_up               NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS shuttle_run           NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS kesamaptaan_hga         NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS kesamaptaan_nga         NUMERIC(10,2),
 
-  ADD COLUMN IF NOT EXISTS nilai_b               NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS na_a_b                NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS samapta_x80           NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS nilai_akhir           NUMERIC(10,2),
-  ADD COLUMN IF NOT EXISTS ktgr                  TEXT,
-  ADD COLUMN IF NOT EXISTS ket                   TEXT,
-  ADD COLUMN IF NOT EXISTS catatan               TEXT,
-  ADD COLUMN IF NOT EXISTS paraf                 TEXT,
+  ADD COLUMN IF NOT EXISTS pull_up_hgb1            NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS pull_up_ngb1            NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS sit_up_hgb2             NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS sit_up_ngb2             NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS push_up_hgb3            NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS push_up_ngb3            NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS shuttle_run_hgb4        NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS shuttle_run_ngb4        NUMERIC(10,2),
 
-  ADD COLUMN IF NOT EXISTS sumber_file           TEXT,
-  ADD COLUMN IF NOT EXISTS sheet_name            TEXT,
-  ADD COLUMN IF NOT EXISTS created_at            TIMESTAMP DEFAULT NOW(),
-  ADD COLUMN IF NOT EXISTS updated_at            TIMESTAMP DEFAULT NOW();
+  ADD COLUMN IF NOT EXISTS pull_up_chinning        NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS sit_up                  NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS push_up                 NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS shuttle_run             NUMERIC(10,2),
 
--- 3) Trigger updated_at
+  ADD COLUMN IF NOT EXISTS nilai_b                 NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS na_a_b                  NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS samapta_x80             NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS nilai_akhir             NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS ktgr                    TEXT,
+  ADD COLUMN IF NOT EXISTS ket                     TEXT,
+  ADD COLUMN IF NOT EXISTS catatan                 TEXT,
+  ADD COLUMN IF NOT EXISTS paraf                   TEXT,
+
+  ADD COLUMN IF NOT EXISTS sumber_file             TEXT,
+  ADD COLUMN IF NOT EXISTS sheet_name              TEXT,
+  ADD COLUMN IF NOT EXISTS created_at              TIMESTAMP DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at              TIMESTAMP DEFAULT NOW();
+
+-- Migrasi: jika masih ada kolom lama lari_12_menit → salin ke kesamaptaan_hga lalu drop
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='jasmani_polda' AND column_name='lari_12_menit'
+  ) THEN
+    EXECUTE $m$
+      UPDATE jasmani_polda
+      SET kesamaptaan_hga = COALESCE(kesamaptaan_hga, lari_12_menit)
+    $m$;
+    EXECUTE 'ALTER TABLE jasmani_polda DROP COLUMN lari_12_menit';
+  END IF;
+END$$;
+
+-- Migrasi ringan: isikan kolom generik dari NGB jika generik NULL
+UPDATE jasmani_polda
+SET
+  pull_up_chinning = COALESCE(pull_up_chinning, pull_up_ngb1),
+  sit_up           = COALESCE(sit_up,           sit_up_ngb2),
+  push_up          = COALESCE(push_up,          push_up_ngb3),
+  shuttle_run      = COALESCE(shuttle_run,      shuttle_run_ngb4)
+WHERE
+  pull_up_chinning IS NULL OR sit_up IS NULL OR push_up IS NULL OR shuttle_run IS NULL;
+
+-- Trigger updated_at (idempotent)
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_jasmani_polda_updated') THEN
@@ -704,12 +742,11 @@ BEGIN
   END IF;
 END$$;
 
--- 4) Index bantu
-CREATE INDEX IF NOT EXISTS idx_jp_nopanda       ON jasmani_polda (no_panda);
-CREATE INDEX IF NOT EXISTS idx_jp_angkatan      ON jasmani_polda (angkatan);
-CREATE INDEX IF NOT EXISTS idx_jp_nama_lower    ON jasmani_polda (LOWER(nama));
+-- Indeks bantu + Unique
+CREATE INDEX IF NOT EXISTS idx_jp_nopanda    ON jasmani_polda (no_panda);
+CREATE INDEX IF NOT EXISTS idx_jp_angkatan   ON jasmani_polda (angkatan);
+CREATE INDEX IF NOT EXISTS idx_jp_nama_lower ON jasmani_polda (LOWER(nama));
 
--- 5) (OPSIONAL) Cegah duplikat per (no_panda, angkatan) — aktifkan kalau mau strict
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -724,9 +761,76 @@ BEGIN
 END$$;
 
 -- ======================================================================
--- END: NILAI JASMANI POLDA
+-- END: jasmani_polda
 -- ======================================================================
+-- =========================================
+-- PATCH: jasmani_polda - KESAMAPTAAN HGA/NGA dan versi numeriknya
+-- =========================================
 
+-- Tambah kolom TEXT (label) bila belum ada
+ALTER TABLE jasmani_polda
+  ADD COLUMN IF NOT EXISTS kesamaptaan_hga TEXT,
+  ADD COLUMN IF NOT EXISTS kesamaptaan_nga TEXT;
+
+-- Opsi: kolom angka pendamping (kalau nanti ada nilai numerik)
+ALTER TABLE jasmani_polda
+  ADD COLUMN IF NOT EXISTS kesamaptaan_hga_num NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS kesamaptaan_nga_num NUMERIC(10,2);
+
+-- Jika sebelumnya sempat dibuat NUMERIC, ubah ke TEXT agar tidak error "MS"
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_name='jasmani_polda' AND column_name='kesamaptaan_hga'
+      AND udt_name IN ('numeric','float8','float4')
+  ) THEN
+    EXECUTE $q$
+      ALTER TABLE jasmani_polda
+      ALTER COLUMN kesamaptaan_hga TYPE TEXT
+      USING NULLIF(TRIM(kesamaptaan_hga::text),'')
+    $q$;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_name='jasmani_polda' AND column_name='kesamaptaan_nga'
+      AND udt_name IN ('numeric','float8','float4')
+  ) THEN
+    EXECUTE $q$
+      ALTER TABLE jasmani_polda
+      ALTER COLUMN kesamaptaan_nga TYPE TEXT
+      USING NULLIF(TRIM(kesamaptaan_nga::text),'')
+    $q$;
+  END IF;
+END$$;
+
+-- Kolom HGB/NGB per item (aman dijalankan berulang)
+ALTER TABLE jasmani_polda
+  ADD COLUMN IF NOT EXISTS pull_up_hgb1     NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS pull_up_ngb1     NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS sit_up_hgb2      NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS sit_up_ngb2      NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS push_up_hgb3     NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS push_up_ngb3     NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS shuttle_run_hgb4 NUMERIC(10,2),
+  ADD COLUMN IF NOT EXISTS shuttle_run_ngb4 NUMERIC(10,2);
+ALTER TABLE jasmani_polda
+  DROP COLUMN IF EXISTS jk,
+  DROP COLUMN IF EXISTS pull_up_chining,
+  DROP COLUMN IF EXISTS sit_up,
+  DROP COLUMN IF EXISTS push_up,
+  DROP COLUMN IF EXISTS shuttle_run,
+  DROP COLUMN IF EXISTS paraf,
+  DROP COLUMN IF EXISTS polda,
+  DROP COLUMN IF EXISTS panda,
+  DROP COLUMN IF EXISTS tahun,
+  DROP COLUMN IF EXISTS kesamaptaan_hga_num,
+  DROP COLUMN IF EXISTS kesamaptaan_nga_num;
+ALTER TABLE jasmani_polda
+  DROP COLUMN IF EXISTS pull_up_chining CASCADE;
 -- =========================================
 -- Selesai
 -- =========================================

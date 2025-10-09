@@ -426,6 +426,438 @@ function MentalTable({ rows, rank }) {
     </>
   );
 }
+function JasmaniTable({ rows, rank }) {
+  const norm = useMemo(() => {
+    if (!Array.isArray(rows)) return [];
+    return (
+      rows
+        .map((r) => {
+          const jenis =
+            r.jenis_test ??
+            r.jenis ??
+            r.test ??
+            r.nama_test ??
+            r.kategori ??
+            r.item ??
+            "-";
+
+          const nilaiRaw =
+            r.nilai ?? r.skor ?? r.value ?? r.score ?? r.penilaian ?? null;
+          const nilai = nilaiRaw == null ? null : String(nilaiRaw);
+          const nilaiNum = toNumberOrNull(nilai);
+
+          const catatan = r.catatan ?? r.note ?? r.keterangan ?? null;
+
+          const ts =
+            r.updated_at ??
+            r.updatedAt ??
+            r.created_at ??
+            r.createdAt ??
+            r.tanggal ??
+            null;
+
+          const time = ts ? new Date(ts) : null;
+
+          return {
+            jenis: String(jenis),
+            nilai,
+            nilaiNum,
+            catatan: catatan == null ? null : String(catatan),
+            time,
+          };
+        })
+        // urutkan per jenis lalu terbaru di atas
+        .sort((a, b) => {
+          const n = a.jenis.localeCompare(b.jenis, "id");
+          if (n !== 0) return n;
+          if (a.time && b.time) return b.time - a.time;
+          return 0;
+        })
+    );
+  }, [rows]);
+
+  const summary = useMemo(() => {
+    const nums = norm.map((r) => r.nilaiNum).filter((n) => n != null);
+    if (!nums.length) {
+      return { count: 0, avg: null, min: null, max: null };
+    }
+    const sum = nums.reduce((a, b) => a + b, 0);
+    return {
+      count: nums.length,
+      avg: sum / nums.length,
+      min: Math.min(...nums),
+      max: Math.max(...nums),
+    };
+  }, [norm]);
+
+  return (
+    <>
+      {/* Ringkasan + Ranking (gaya Mental) */}
+      <div
+        className="card"
+        style={{
+          marginBottom: 12,
+          display: "grid",
+          gap: 10,
+          border: "1px solid #1f2937",
+          background: "#0b1220",
+          borderRadius: 12,
+          padding: 12,
+        }}
+      >
+        <div style={{ fontWeight: 800 }}>
+          Ringkasan
+          {rank?.angkatan ? (
+            <span className="muted" style={{ marginLeft: 8, fontWeight: 400 }}>
+              · Ranking Angkatan <b>{rank.angkatan}</b>
+            </span>
+          ) : null}
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0,1fr))",
+            gap: 12,
+          }}
+        >
+          <SummaryItem label="Jumlah Data">
+            {summary.count.toString()}
+          </SummaryItem>
+          <SummaryItem label="Rata-rata">
+            {summary.avg == null ? "-" : summary.avg.toFixed(2)}
+          </SummaryItem>
+          <SummaryItem label="Nilai Minimum">
+            {summary.min == null ? "-" : summary.min}
+          </SummaryItem>
+          <SummaryItem label="Nilai Maksimum">
+            {summary.max == null ? "-" : summary.max}
+          </SummaryItem>
+        </div>
+
+        {rank ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, minmax(0,1fr))",
+              gap: 12,
+            }}
+          >
+            <RankItem
+              label="Global"
+              pos={rank?.rank?.global?.pos}
+              total={rank?.rank?.global?.total}
+            />
+            <RankItem
+              label={`Batalion${rank?.batalion ? ` ${rank.batalion}` : ""}`}
+              pos={rank?.rank?.batalion?.pos}
+              total={rank?.rank?.batalion?.total}
+            />
+            <RankItem
+              label={`Kompi${rank?.kompi ? ` ${rank.kompi}` : ""}`}
+              pos={rank?.rank?.kompi?.pos}
+              total={rank?.rank?.kompi?.total}
+            />
+            <RankItem
+              label={
+                rank?.kompi && rank?.pleton != null
+                  ? `Pleton ${rank.kompi}${rank.pleton}`
+                  : "Pleton"
+              }
+              pos={rank?.rank?.pleton?.pos}
+              total={rank?.rank?.pleton?.total}
+            />
+          </div>
+        ) : null}
+      </div>
+
+      {/* Tabel: Jenis Test | Nilai | Catatan | Created At */}
+      {norm.length ? (
+        <div style={{ overflowX: "auto" }}>
+          <table className="table" style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Jenis Test
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Nilai
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Catatan
+                </th>
+                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                  Created At
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {norm.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ whiteSpace: "nowrap" }}>{r.jenis || "-"}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{r.nilai ?? "-"}</td>
+                  <td style={{ maxWidth: 600, overflowWrap: "anywhere" }}>
+                    {r.catatan ?? "-"}
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {r.time ? r.time.toLocaleString("id-ID") : "-"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div style={{ color: "#94a3b8" }}>Belum ada data.</div>
+      )}
+    </>
+  );
+}
+/* ---------- MapelTable (DISTINCT mapel, kolom pertemuan dinamis + ringkasan & ranking) ---------- */
+
+function MapelTable({ rows, rank }) {
+  const { matrix, mapelList, pertemuanList, stats } = useMemo(() => {
+    if (!Array.isArray(rows)) {
+      return {
+        matrix: new Map(),
+        mapelList: [],
+        pertemuanList: [],
+        stats: { count: 0, avg: null, min: null, max: null },
+      };
+    }
+
+    const norm = rows
+      .map((r) => {
+        const mapel =
+          r.mapel ??
+          r.nama_mapel ??
+          r.pelajaran ??
+          r.subject ??
+          r.mata_pelajaran ??
+          "-";
+        const pertemuanRaw =
+          r.pertemuan ?? r.minggu_ke ?? r.minggu ?? r.week ?? r.week_no ?? null;
+        const pertemuan =
+          typeof pertemuanRaw === "number"
+            ? pertemuanRaw
+            : /^\d+$/.test(String(pertemuanRaw ?? "").trim())
+            ? parseInt(String(pertemuanRaw).trim(), 10)
+            : null;
+
+        const nilai =
+          r.nilai ?? r.skor ?? r.value ?? r.score ?? r.penilaian ?? null;
+        const nilaiNum = toNumberOrNull(nilai);
+        const ts =
+          r.updated_at ?? r.updatedAt ?? r.created_at ?? r.tanggal ?? null;
+
+        return {
+          mapel: String(mapel),
+          pertemuan,
+          nilai: nilai == null ? null : String(nilai),
+          nilaiNum,
+          time: ts ? new Date(ts) : null,
+        };
+      })
+      .filter((x) => x.mapel);
+
+    const nums = norm.map((x) => x.nilaiNum).filter((n) => n != null);
+    const stats =
+      nums.length === 0
+        ? { count: 0, avg: null, min: null, max: null }
+        : {
+            count: nums.length,
+            avg: nums.reduce((a, b) => a + b, 0) / nums.length,
+            min: Math.min(...nums),
+            max: Math.max(...nums),
+          };
+
+    const mapelSet = new Set(norm.map((x) => x.mapel));
+    const pertemuanSet = new Set(
+      norm
+        .map((x) => (typeof x.pertemuan === "number" ? x.pertemuan : null))
+        .filter((x) => x != null)
+    );
+
+    const matrix = new Map();
+    for (const row of norm) {
+      if (typeof row.pertemuan !== "number") continue;
+      const key = `${row.mapel}||${row.pertemuan}`;
+      const prev = matrix.get(key);
+      if (!prev || (row.time && (!prev.time || row.time > prev.time))) {
+        matrix.set(key, row);
+      }
+    }
+
+    const mapelList = Array.from(mapelSet).sort((a, b) =>
+      a.localeCompare(b, "id")
+    );
+    const pertemuanList = Array.from(pertemuanSet).sort((a, b) => a - b);
+
+    return { matrix, mapelList, pertemuanList, stats };
+  }, [rows]);
+
+  return (
+    <>
+      {/* Ringkasan + Ranking (gaya Mental) */}
+      <div
+        className="card"
+        style={{
+          marginBottom: 12,
+          display: "grid",
+          gap: 10,
+          border: "1px solid #1f2937",
+          background: "#0b1220",
+          borderRadius: 12,
+          padding: 12,
+        }}
+      >
+        <div style={{ fontWeight: 800 }}>
+          Ringkasan
+          {rank?.angkatan ? (
+            <span className="muted" style={{ marginLeft: 8, fontWeight: 400 }}>
+              · Ranking Angkatan <b>{rank.angkatan}</b>
+            </span>
+          ) : null}
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0,1fr))",
+            gap: 12,
+          }}
+        >
+          <SummaryItem label="Jumlah Data">
+            {stats.count.toString()}
+          </SummaryItem>
+          <SummaryItem label="Rata-rata">
+            {stats.avg == null ? "-" : stats.avg.toFixed(2)}
+          </SummaryItem>
+          <SummaryItem label="Nilai Minimum">
+            {stats.min == null ? "-" : stats.min}
+          </SummaryItem>
+          <SummaryItem label="Nilai Maksimum">
+            {stats.max == null ? "-" : stats.max}
+          </SummaryItem>
+        </div>
+
+        {rank ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, minmax(0,1fr))",
+              gap: 12,
+            }}
+          >
+            <RankItem
+              label="Global"
+              pos={rank?.rank?.global?.pos}
+              total={rank?.rank?.global?.total}
+            />
+            <RankItem
+              label={`Batalion${rank?.batalion ? ` ${rank.batalion}` : ""}`}
+              pos={rank?.rank?.batalion?.pos}
+              total={rank?.rank?.batalion?.total}
+            />
+            <RankItem
+              label={`Kompi${rank?.kompi ? ` ${rank.kompi}` : ""}`}
+              pos={rank?.rank?.kompi?.pos}
+              total={rank?.rank?.kompi?.total}
+            />
+            <RankItem
+              label={
+                rank?.kompi && rank?.pleton != null
+                  ? `Pleton ${rank.kompi}${rank.pleton}`
+                  : "Pleton"
+              }
+              pos={rank?.rank?.pleton?.pos}
+              total={rank?.rank?.pleton?.total}
+            />
+          </div>
+        ) : null}
+      </div>
+
+      {/* >>> Scroll HANYA di tabel <<< */}
+      {mapelList.length ? (
+        <div
+          style={{
+            width: "100%",
+            overflowX: "auto",
+            overscrollBehaviorX: "contain",
+          }}
+        >
+          {/* lapisan ini mencegah body melebar */}
+          <div style={{ display: "inline-block", minWidth: "100%" }}>
+            <table
+              className="table"
+              style={{
+                width: "100%",
+                tableLayout: "auto",
+                borderCollapse: "separate",
+              }}
+            >
+              <thead>
+                {/* Baris 1: Mapel | Pertemuan (span semua minggu) */}
+                <tr>
+                  <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
+                    Mapel
+                  </th>
+                  <th
+                    colSpan={pertemuanList.length}
+                    style={{ textAlign: "center", whiteSpace: "nowrap" }}
+                  >
+                    Pertemuan
+                  </th>
+                </tr>
+
+                {/* Baris 2: header per-minggu */}
+                <tr>
+                  <th style={{ textAlign: "left", whiteSpace: "nowrap" }} />
+                  {pertemuanList.map((p) => (
+                    <th
+                      key={p}
+                      style={{ textAlign: "left", whiteSpace: "nowrap" }}
+                    >
+                      {p}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+
+              <tbody>
+                {mapelList.map((m) => (
+                  <tr key={m}>
+                    <td style={{ whiteSpace: "nowrap" }}>{m}</td>
+                    {pertemuanList.map((p) => {
+                      const cell = matrix.get(`${m}||${p}`);
+                      if (!cell) {
+                        return (
+                          <td
+                            key={`${m}-${p}`}
+                            style={{ whiteSpace: "nowrap" }}
+                          >
+                            -
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={`${m}-${p}`} style={{ whiteSpace: "nowrap" }}>
+                          {cell.nilai ?? "-"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div style={{ color: "#94a3b8" }}>Belum ada data.</div>
+      )}
+    </>
+  );
+}
 
 /* ---------- DownloadNotice (banner progres) ---------- */
 
@@ -1126,12 +1558,13 @@ export default function SiswaDetail({ nik }) {
       const rows = Array.isArray(json) ? json : json.items || [];
       setDataMap((m) => ({ ...m, [tabKey]: rows }));
 
-      if (tabKey === "mental") {
+      if (tabKey === "mental" || tabKey === "mapel") {
+        // gunakan endpoint rank yang sama agar tampilan konsisten
         try {
           const rank = await fetchMentalRankByNik(safeNik, token);
           setMentalRank(rank);
         } catch (e) {
-          console.warn("[mental rank] fetch error:", e.message);
+          console.warn("[rank] fetch error:", e.message);
           setMentalRank(null);
         }
       }
@@ -1361,12 +1794,14 @@ export default function SiswaDetail({ nik }) {
       return <MentalTable rows={dataMap["mental"] || []} rank={mentalRank} />;
     }
 
-    // Mapel & Jasmani: tampilkan ala MentalTable (ringkasan angka + tabel)
+    // Mapel: DISTINCT mapel, header pertemuan dinamis + ranking
     if (active === "mapel") {
-      return <MentalTable rows={dataMap["mapel"] || []} />;
+      return <MapelTable rows={dataMap["mapel"] || []} rank={mentalRank} />;
     }
+
+    // Jasmani: tetap ala MentalTable (sesuai instruksi sebelumnya)
     if (active === "jasmani") {
-      return <MentalTable rows={dataMap["jasmani"] || []} />;
+      return <JasmaniTable rows={dataMap["jasmani"] || []} rank={mentalRank} />;
     }
 
     if (active === "bk") {

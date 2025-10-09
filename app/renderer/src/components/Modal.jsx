@@ -1,7 +1,58 @@
 // src/components/Modal.jsx
 import { useEffect } from "react";
 
-export default function Modal({ open, onClose, title, children, width = 880 }) {
+const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
+// --- Utils kecil: samakan perilaku dengan SiswaDetail ---
+function buildDownloadUrl(filePath) {
+  if (!filePath) return "#";
+  const clean = String(filePath)
+    .replace(/^\/+/, "")
+    .replace(/^uploads\//i, "");
+  return `${API}/download?path=${encodeURIComponent(clean)}`;
+}
+
+async function handleDownloadLikeApp({ url, isRaw = false }) {
+  const targetUrl = isRaw ? url : buildDownloadUrl(url);
+
+  try {
+    // HEAD check seperti di SiswaDetail
+    const head = await fetch(targetUrl, { method: "HEAD" });
+    if (!head.ok) {
+      alert("Tidak ada data / file tidak ditemukan.");
+      return;
+    }
+  } catch (e) {
+    alert("Gagal memeriksa file: " + (e?.message || "unknown"));
+    return;
+  }
+
+  // Electron-aware download
+  if (window.electronAPI?.download) {
+    window.electronAPI.download(targetUrl);
+  } else {
+    const a = document.createElement("a");
+    a.href = targetUrl;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+}
+
+export default function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  width = 880,
+
+  // ✅ Opsi tombol download ala aplikasi desktop:
+  // - pilih salah satu:
+  downloadPath, // string: path di server → akan jadi /download?path=...
+  downloadUrl, // string: URL langsung (public/CDN)
+  downloadLabel = "Download template",
+}) {
   useEffect(() => {
     function onKey(e) {
       if (e.key === "Escape") onClose?.();
@@ -11,6 +62,18 @@ export default function Modal({ open, onClose, title, children, width = 880 }) {
   }, [open, onClose]);
 
   if (!open) return null;
+
+  const showDownload = Boolean(downloadPath || downloadUrl);
+
+  async function onDownloadClick() {
+    if (downloadUrl) {
+      // URL langsung (raw)
+      await handleDownloadLikeApp({ url: downloadUrl, isRaw: true });
+    } else if (downloadPath) {
+      // Path ke server → /download?path=...
+      await handleDownloadLikeApp({ url: downloadPath, isRaw: false });
+    }
+  }
 
   return (
     <div
@@ -52,16 +115,57 @@ export default function Modal({ open, onClose, title, children, width = 880 }) {
             justifyContent: "space-between",
             padding: "0 14px",
             borderBottom: "1px solid #1f2937",
+            gap: 8,
           }}
         >
-          <div style={{ fontWeight: 800 }}>{title}</div>
-          <button
-            className="btn"
-            onClick={onClose}
-            style={{ background: "#111827", border: "1px solid #1f2937" }}
+          <div
+            style={{
+              fontWeight: 800,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
           >
-            ✕
-          </button>
+            {title}
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {showDownload && (
+              <button
+                type="button"
+                onClick={onDownloadClick}
+                className="btn"
+                style={{
+                  background: "#0ea5e9",
+                  border: "1px solid #0284c7",
+                  color: "#0b1220",
+                  fontWeight: 700,
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                }}
+                aria-label={downloadLabel}
+                title={downloadLabel}
+              >
+                ⬇ {downloadLabel}
+              </button>
+            )}
+
+            <button
+              className="btn"
+              onClick={onClose}
+              aria-label="Tutup modal"
+              style={{
+                background: "#111827",
+                border: "1px solid #1f2937",
+                color: "#e5e7eb",
+                fontWeight: 700,
+                padding: "8px 12px",
+                borderRadius: 10,
+              }}
+            >
+              ✕
+            </button>
+          </div>
         </header>
 
         <div style={{ overflow: "auto", padding: 14 }}>{children}</div>

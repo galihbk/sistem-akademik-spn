@@ -11,11 +11,47 @@ const REASON_TEXT = {
 };
 const translateReason = (code) => REASON_TEXT[code] || code || "-";
 
+/* ====== Utils download ala aplikasi (Electron-aware) ====== */
+function buildDownloadUrl(filePath) {
+  if (!filePath) return "#";
+  const clean = String(filePath)
+    .replace(/^\/+/, "")
+    .replace(/^uploads\//i, "");
+  return `${API}/download?path=${encodeURIComponent(clean)}`;
+}
+async function electronAwareDownload(targetUrl) {
+  try {
+    const head = await fetch(targetUrl, { method: "HEAD" });
+    if (!head.ok) {
+      alert("Tidak ada data / file tidak ditemukan.");
+      return;
+    }
+  } catch (e) {
+    alert("Gagal memeriksa file: " + (e?.message || "unknown"));
+    return;
+  }
+  if (window.electronAPI?.download) {
+    window.electronAPI.download(targetUrl);
+  } else {
+    const a = document.createElement("a");
+    a.href = targetUrl;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+}
+
 export default function ImportExcel({
   endpoint,
   title,
   requireAngkatan = false,
   onAfterImport, // callback ke halaman: {success, summary}
+
+  // 🔽 Tambahan untuk tombol Download Template
+  templatePath, // string: path ke server → /download?path=templatePath
+  templateUrl, // string: URL langsung (public/CDN)
+  templateLabel = "Download template",
 }) {
   const [file, setFile] = useState(null);
   const [result, setResult] = useState(null);
@@ -87,11 +123,7 @@ export default function ImportExcel({
       const form = new FormData();
       form.append("file", file);
 
-      // ================== PERBAIKAN PENTING: Normalisasi endpoint ==================
-      // Menerima:
-      // - "http://.../path"   -> dipakai apa adanya
-      // - "/path"             -> digabung ke API (BASE_URL + path)
-      // - "relative-name"     -> default ke `${API}/import/${relative-name}`
+      // Normalisasi endpoint
       let target;
       if (/^https?:\/\//i.test(endpoint)) {
         target = endpoint;
@@ -102,8 +134,8 @@ export default function ImportExcel({
       }
       const url = new URL(target);
       if (dryRun) url.searchParams.set("dryRun", "true");
-      if (requireAngkatan && angkatan) url.searchParams.set("angkatan", angkatan);
-      // ============================================================================
+      if (requireAngkatan && angkatan)
+        url.searchParams.set("angkatan", angkatan);
 
       const res = await fetch(url.toString(), {
         method: "POST",
@@ -113,9 +145,8 @@ export default function ImportExcel({
 
       const data = await res.json();
 
-      // Normalisasi bentuk payload detail -> detailLists
-      const detail =
-        data?.detailLists ||
+      // Normalisasi detail -> detailLists
+      const detail = data?.detailLists ||
         data?.detail || {
           ok: data?.okList || [],
           skip: data?.skipList || [],
@@ -147,7 +178,6 @@ export default function ImportExcel({
         }
       }
 
-      // Ringkasan & status
       const s = summarize(normalized);
       setLastImport({ mode: dryRun ? "dry" : "import", ...s });
 
@@ -182,6 +212,17 @@ export default function ImportExcel({
   );
   const current = activeTab ? lists[activeTab] || [] : [];
 
+  // Handler tombol Download template
+  async function onDownloadTemplate() {
+    if (templateUrl) {
+      await electronAwareDownload(templateUrl);
+    } else if (templatePath) {
+      await electronAwareDownload(buildDownloadUrl(templatePath));
+    }
+  }
+
+  const showTemplateBtn = Boolean(templateUrl || templatePath);
+
   return (
     <div className="grid" style={{ position: "relative" }}>
       {loading && <LoadingOverlay />}
@@ -192,12 +233,33 @@ export default function ImportExcel({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          gap: 8,
         }}
       >
         <div>
           <div style={{ fontWeight: 800, fontSize: 18 }}>{title}</div>
           <div className="muted">Gunakan file .xlsx sesuai template</div>
         </div>
+
+        {showTemplateBtn && (
+          <button
+            type="button"
+            className="btn"
+            onClick={onDownloadTemplate}
+            title={templateLabel}
+            style={{
+              background: "#0ea5e9",
+              border: "1px solid #0284c7",
+              color: "#0b1220",
+              fontWeight: 700,
+              padding: "8px 12px",
+              borderRadius: 10,
+              whiteSpace: "nowrap",
+            }}
+          >
+            ⬇ {templateLabel}
+          </button>
+        )}
       </div>
 
       <div className="card">

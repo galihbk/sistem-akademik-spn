@@ -43,7 +43,7 @@ Thumbs.db
 # PDF / Upload files
 *.pdf
 assets/uploads/
-uploads/
+
 
 # IDE & editor settings
 .idea/

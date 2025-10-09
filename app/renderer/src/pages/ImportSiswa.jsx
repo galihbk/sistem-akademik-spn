@@ -95,6 +95,7 @@ export default function ImportSiswa() {
         <ImportExcel
           endpoint="siswa"
           title="Import Data Siswa (Excel)"
+          templatePath="templates/Template-import-siswa.xlsx"
           onAfterImport={({ success, summary }) => {
             // tampilkan status, tutup modal, refresh daftar
             setStatus({ success: !!success, summary });

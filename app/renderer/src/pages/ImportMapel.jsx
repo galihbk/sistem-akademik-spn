@@ -126,6 +126,7 @@ export default function ImportMapel() {
           // SESUAIKAN PREFIX: kalau server kamu di /api -> "/api/mapel/import-excel"
           endpoint="/mapel/import-excel"
           title="Import Nilai Mapel (Rek_mat)"
+          templatePath="templates/Template-import-mapel.xlsx"
           requireAngkatan
           onAfterImport={({ success, summary }) => {
             setStatus({ success: !!success, summary });

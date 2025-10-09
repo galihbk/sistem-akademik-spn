@@ -109,12 +109,11 @@ export default function ImportJasmani() {
         width={920}
       >
         <ImportExcel
-          endpoint="/jasmani/import-excel" // POST /jasmani/import-excel
+          endpoint="/jasmani/import-excel"
           title="Import Nilai Jasmani (Sheet: REKAP)"
-          requireAngkatan // <-- ini yang memunculkan dropdown angkatan
-          defaultAngkatan={angkatanFromShell || ""} // prefill dari Shell kalau ada
-          // kalau mau sertakan tahap di query import, isi extraQuery:
-          // extraQuery={{ tahap: 1 }}
+          templatePath="templates/Template-import-jasmani.xlsx"
+          requireAngkatan
+          defaultAngkatan={angkatanFromShell || ""}
           onAfterImport={({ success, summary }) => {
             setStatus({ success: !!success, summary: summary || {} });
             setOpen(false);

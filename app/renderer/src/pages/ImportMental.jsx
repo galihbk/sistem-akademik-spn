@@ -105,6 +105,7 @@ export default function ImportMental() {
         <ImportExcel
           endpoint="mental"
           title="Import Mental Kepribadian"
+          templatePath="templates/Template-import-nimen.xlsx"
           requireAngkatan
           onAfterImport={({ success, summary }) => {
             setStatus({ success: !!success, summary });

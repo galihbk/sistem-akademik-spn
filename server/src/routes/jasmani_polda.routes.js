@@ -33,5 +33,6 @@ const upload = multer({ storage });
 // endpoints
 router.post("/import-excel", upload.single("file"), ctrl.importExcel);
 router.get("/rekap", ctrl.rekap);
+router.patch("/:id/set-siswa", ctrl.setSiswa);
 
 module.exports = router;
