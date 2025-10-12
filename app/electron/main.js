@@ -8,7 +8,9 @@ const https = require('https');
 
 let mainWindow = null;
 
-// ===== Simple logger ke file =====
+/* =========================
+ *  Logger sederhana ke file
+ * ========================= */
 let LOG_FILE = null;
 function initLogger() {
   try {
@@ -31,7 +33,9 @@ function showErrorBox(title, err) {
   try { dialog.showErrorBox(title, msg); } catch {}
 }
 
-// ===== Global state =====
+/* ====================
+ *  Global App State
+ * ==================== */
 let settingsCache = {
   askWhere: false,
   saveFolder: '',
@@ -40,7 +44,9 @@ let settingsCache = {
 };
 let authToken = null;
 
-// ===== Create window safely =====
+/* =========================
+ *  Create Browser Window
+ * ========================= */
 function createWindow() {
   try {
     const preloadPath = path.join(__dirname, 'preload.js');
@@ -70,15 +76,11 @@ function createWindow() {
     const RENDERER_URL = process.env.RENDERER_URL;
     if (RENDERER_URL) {
       log('[loadURL]', RENDERER_URL);
-      mainWindow.loadURL(RENDERER_URL).catch((e) => {
-        showErrorBox('Gagal load RENDERER_URL', e);
-      });
+      mainWindow.loadURL(RENDERER_URL).catch((e) => showErrorBox('Gagal load RENDERER_URL', e));
     } else {
       const indexPath = path.join(process.cwd(), 'renderer', 'dist', 'index.html');
       log('[loadFile]', indexPath);
-      mainWindow.loadFile(indexPath).catch((e) => {
-        showErrorBox('Gagal load renderer index.html', e);
-      });
+      mainWindow.loadFile(indexPath).catch((e) => showErrorBox('Gagal load renderer index.html', e));
     }
 
     mainWindow.on('closed', () => { mainWindow = null; });
@@ -87,9 +89,11 @@ function createWindow() {
   }
 }
 
-// ===== App lifecycle =====
+/* =======================
+ *  App Lifecycle Hooks
+ * ======================= */
 if (!app.requestSingleInstanceLock()) {
-  app.quit(); // pastikan single instance
+  app.quit();
 } else {
   app.on('second-instance', () => {
     if (mainWindow) {
@@ -107,12 +111,13 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
 }
-
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// ===== Global error handlers =====
+/* =========================
+ *  Global Error Handlers
+ * ========================= */
 process.on('uncaughtException', (err) => {
   showErrorBox('Uncaught Exception (main)', err);
 });
@@ -123,7 +128,9 @@ app.on('render-process-gone', (_e, wc, details) => {
   log('[render-process-gone]', details && JSON.stringify(details));
 });
 
-// ===== Helpers =====
+/* =========================
+ *  Helper Utilities (HTTP)
+ * ========================= */
 function notify(payload) {
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -133,6 +140,7 @@ function notify(payload) {
     log('[notify error]', e.message);
   }
 }
+
 function getClientAndOpts(urlStr, token) {
   const u = urlMod.parse(urlStr);
   const isHttps = u.protocol === 'https:';
@@ -149,12 +157,14 @@ function getClientAndOpts(urlStr, token) {
   if (token) opts.headers.Authorization = `Bearer ${token}`;
   return { client, opts };
 }
+
 function encodePathSegments(rel) {
   return rel.split('/').map(encodeURIComponent).join('/');
 }
 function ensureDir(p) {
   try { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); } catch (e) { log('[ensureDir]', p, e.message); }
 }
+
 function httpGetJson(urlStr, token) {
   log('[httpGetJson]', urlStr);
   return new Promise((resolve, reject) => {
@@ -178,6 +188,8 @@ function httpGetJson(urlStr, token) {
     req.end();
   });
 }
+
+// Download file dari beberapa sumber (dipakai backup uploads)
 function downloadWithFallbackToFile(urls, outPath, token) {
   log('[downloadWithFallbackToFile]', urls.join(' | '), '->', outPath);
   return new Promise((resolve, reject) => {
@@ -217,12 +229,94 @@ function downloadWithFallbackToFile(urls, outPath, token) {
   });
 }
 
-// ===== IPC: AUTH =====
+/* ======================================
+ *  Generic Download (Export, dsb)
+ * ====================================== */
+function getDefaultDirForDownload() {
+  if (settingsCache.exportFolder && fs.existsSync(settingsCache.exportFolder)) return settingsCache.exportFolder;
+  if (settingsCache.saveFolder   && fs.existsSync(settingsCache.saveFolder))   return settingsCache.saveFolder;
+  return app.getPath('downloads');
+}
+function inferFilenameFrom(urlStr, headers = {}) {
+  const cd = headers['content-disposition'] || headers['Content-Disposition'];
+  if (cd) {
+    // filename atau filename*
+    const star = /filename\*=(?:UTF-8'')?["']?([^"';]+)["']?/i.exec(cd);
+    if (star && star[1]) return decodeURIComponent(star[1]);
+    const plain = /filename=["']?([^"';]+)["']?/i.exec(cd);
+    if (plain && plain[1]) return plain[1];
+  }
+  try {
+    const u = new URL(urlStr);
+    const base = path.basename(u.pathname || '');
+    if (base && base !== '/' && base !== '.') return base;
+  } catch {}
+  return `download-${Date.now()}`;
+}
+async function downloadToFile(urlStr, suggestedName) {
+  // 1) tentukan lokasi & nama file
+  let defaultDir = getDefaultDirForDownload();
+  ensureDir(defaultDir);
+  let defaultPath = path.join(defaultDir, suggestedName || inferFilenameFrom(urlStr));
+
+  // 2) jika askWhere → dialog simpan
+  if (settingsCache.askWhere) {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Simpan File',
+      defaultPath: defaultPath,
+    });
+    if (canceled || !filePath) return { ok: false, message: 'Dibatalkan' };
+    defaultPath = filePath;
+  } else {
+    ensureDir(path.dirname(defaultPath));
+  }
+
+  // 3) request
+  return await new Promise((resolve) => {
+    const { client, opts } = getClientAndOpts(urlStr, authToken);
+    const out = fs.createWriteStream(defaultPath);
+    const req = client.request(opts, (res) => {
+      if (res.statusCode !== 200) {
+        out.destroy();
+        res.resume();
+        return resolve({ ok: false, message: `HTTP ${res.statusCode}` });
+      }
+
+      // update nama file dari header bila ada
+      const hdrName = inferFilenameFrom(urlStr, res.headers);
+      if (hdrName) {
+        const newPath = path.join(path.dirname(defaultPath), hdrName);
+        if (newPath !== defaultPath) {
+          try {
+            out.close();
+            // alihkan stream keluaran ke file baru
+            const out2 = fs.createWriteStream(newPath);
+            res.pipe(out2);
+            res.on('end', () => out2.end(() => resolve({ ok: true, path: newPath })));
+            return; // jangan lanjut ke res.pipe(out)
+          } catch {}
+        }
+      }
+
+      res.pipe(out);
+      res.on('end', () => out.end(() => resolve({ ok: true, path: defaultPath })));
+    });
+    req.on('error', (e) => {
+      out.destroy();
+      resolve({ ok: false, message: e.message });
+    });
+    out.on('error', (e) => resolve({ ok: false, message: e.message }));
+    req.end();
+  });
+}
+
+/* ========================
+ *  IPC: AUTH & SETTINGS
+ * ======================== */
 ipcMain.handle('auth:setToken', async (_e, t) => { authToken = t || null; log('[auth:setToken]', !!authToken); return true; });
 ipcMain.handle('auth:getToken', async () => authToken);
 ipcMain.handle('auth:clearToken', async () => { authToken = null; log('[auth:clearToken]'); return true; });
 
-// ===== IPC: SETTINGS =====
 ipcMain.handle('settings:getAll', async () => settingsCache);
 ipcMain.handle('settings:set', async (_evt, s) => {
   settingsCache = { ...settingsCache, ...s };
@@ -239,7 +333,24 @@ ipcMain.handle('settings:chooseFolder', async (_evt, { initialPath, title }) => 
   return res.filePaths[0];
 });
 
-// ===== IPC: BACKUP (mirror db.sql + uploads) =====
+/* ===========================
+ *  IPC: DOWNLOAD (generic)
+ * =========================== */
+ipcMain.handle('download:start', async (_evt, urlStr, opt = {}) => {
+  if (!urlStr) return { ok: false, message: 'URL kosong' };
+  try {
+    const res = await downloadToFile(urlStr, opt.filename);
+    log('[download:start]', urlStr, '->', res.ok ? res.path : res.message);
+    return res;
+  } catch (e) {
+    log('[download:start error]', e.message);
+    return { ok: false, message: e.message };
+  }
+});
+
+/* ======================================
+ *  IPC: BACKUP (mirror db.sql + uploads)
+ * ====================================== */
 ipcMain.handle('backup:run', async (_evt, { chooseDir } = {}) => {
   try {
     let root = settingsCache.backupFolder && fs.existsSync(settingsCache.backupFolder)
@@ -266,13 +377,13 @@ ipcMain.handle('backup:run', async (_evt, { chooseDir } = {}) => {
     const LIST_URL = `${BASE}/api/admin/backup/uploads-list`;
     const FILE_URL = `${BASE}/api/admin/backup/upload-file?p=`;
 
-    // Dump DB
+    // 1) Dump DB
     notify({ type: 'backup', phase: 'db:start' });
     const dbPath = path.join(root, 'db.sql');
     await downloadWithFallbackToFile([DB_URL], dbPath, authToken);
     notify({ type: 'backup', phase: 'db:done', path: dbPath });
 
-    // List uploads
+    // 2) List uploads
     notify({ type: 'backup', phase: 'files:scan' });
     const listJson = await httpGetJson(LIST_URL, authToken);
     const items = Array.isArray(listJson.items) ? listJson.items : [];
@@ -284,7 +395,7 @@ ipcMain.handle('backup:run', async (_evt, { chooseDir } = {}) => {
       return { ok: true, root, note: 'no uploads' };
     }
 
-    // Mirror uploads
+    // 3) Mirror uploads
     let done = 0;
     const failed = [];
     for (const it of items) {
@@ -293,6 +404,7 @@ ipcMain.handle('backup:run', async (_evt, { chooseDir } = {}) => {
       const dst = path.join(root, 'uploads', rel);
       ensureDir(path.dirname(dst));
 
+      // skip jika ukuran sama (hemat bandwidth)
       let skip = false;
       try {
         const st = fs.statSync(dst);

@@ -375,8 +375,6 @@ export default function Dashboard() {
         <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 8 }}>
           <a className="btn" href="#/import/siswa">Cari Siswa</a>
           <a className="btn" href="#/settings">Cadangan & Pemulihan</a>
-          <a className="btn" href="#/siswa#bk">Kelola PDF BK</a>
-          <a className="btn" href="#/siswa#pelanggaran">Kelola PDF Pelanggaran</a>
         </div>
       </div>
     </div>

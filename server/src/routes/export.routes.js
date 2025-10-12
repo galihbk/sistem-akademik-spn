@@ -1,20 +1,16 @@
-// routes/export.routes.js
-const router = require("express").Router();
-const ctrl = require("../controllers/export.controller");
-// (opsional) kalau Anda pakai auth middleware:
-// const requireAuth = require("../middlewares/requireAuth");
+const express = require("express");
+const router = express.Router();
+const exportCtrl = require("../controllers/export.controller");
 
-// 1) Format utama: /export/nik/:nik
-router.get(
-  "/nik/:nik",
-  /*requireAuth,*/ (req, res, next) => {
-    // ubah ke bentuk yg sama (req.query.nik) agar controller 1 fungsi saja
-    req.query.nik = req.params.nik;
-    return ctrl.exportAllByNik(req, res, next);
-  }
-);
+// Excel daftar siswa (semua kolom)
+router.get("/siswa.xlsx", exportCtrl.exportSiswaXlsx);
 
-// 2) Alias: /export/all?nik=xxxx  (tetap panggil fungsi yang sama)
-router.get("/all", /*requireAuth,*/ ctrl.exportAllByNik);
+// Excel rekap mental (satu tombol, berdasarkan filter)
+router.get("/mental_rekap.xlsx", exportCtrl.exportMentalRekapExcel);
+
+// PDF per NIK (opsional, jika sudah ada route-nya)
+router.get("/all-by-nik.pdf", exportCtrl.exportAllByNik);
+router.get("/jasmani_rekap.xlsx", exportCtrl.exportJasmaniRekapExcel);
+
 
 module.exports = router;

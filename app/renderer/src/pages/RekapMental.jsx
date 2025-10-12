@@ -1,3 +1,4 @@
+// src/pages/RekapMental.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useShell } from "../context/ShellContext";
 
@@ -25,6 +26,40 @@ export default function RekapMental() {
 
   const [weekColumns, setWeekColumns] = useState([]);
 
+  // status export/download
+  const [dlMsg, setDlMsg] = useState("");
+
+  // dengarkan notifikasi download dari proses utama (Electron)
+  useEffect(() => {
+    const off = window.electronAPI?.onDownloadStatus?.((p) => {
+      if (!p || p.type !== "download") return;
+      if (p.phase === "start") {
+        setDlMsg("Menyiapkan file untuk diunduh…");
+      } else if (p.phase === "progress") {
+        const pct = p.total
+          ? Math.min(100, Math.round((p.received / p.total) * 100))
+          : null;
+        setDlMsg(
+          pct != null
+            ? `Mengunduh… ${pct}% (${p.received} / ${p.total} bytes)`
+            : `Mengunduh… ${p.received} bytes`
+        );
+      } else if (p.phase === "done") {
+        setDlMsg(`✔️ Selesai. Tersimpan di: ${p.path}`);
+        clearMsgLater();
+      } else if (p.phase === "error") {
+        setDlMsg(`Gagal mengunduh: ${p.message}`);
+        clearMsgLater();
+      }
+    });
+    return () => off && off();
+  }, []);
+
+  function clearMsgLater(ms = 7000) {
+    window.clearTimeout(clearMsgLater._t);
+    clearMsgLater._t = window.setTimeout(() => setDlMsg(""), ms);
+  }
+
   // opsi angkatan
   useEffect(() => {
     let alive = true;
@@ -48,7 +83,7 @@ export default function RekapMental() {
 
   const angkatanEffective = angkatanFilter || angkatanFromShell || "";
 
-  // URL
+  // URL data rekap
   const url = useMemo(() => {
     const u = new URL(`${API}/mental/rekap`);
     if (q) u.searchParams.set("q", q);
@@ -60,7 +95,7 @@ export default function RekapMental() {
     return u.toString();
   }, [q, page, limit, sortBy, sortDir, angkatanEffective]);
 
-  // fetch
+  // fetch data
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -97,6 +132,7 @@ export default function RekapMental() {
     };
   }, [url]);
 
+  // reset page saat filter/sort berubah
   useEffect(() => {
     setPage(1);
   }, [q, angkatanFilter, angkatanFromShell, sortBy, sortDir]);
@@ -138,6 +174,76 @@ export default function RekapMental() {
     r?.pos != null && r?.total ? `${r.pos}/${r.total}` : "-";
   const fmtAvg = (v) => (v == null ? "-" : Number(v).toFixed(3));
   const fmtSum = (v) => (v == null ? "-" : Number(v).toFixed(3));
+
+  // ---------- EXPORT (single button, semua hasil filter) ----------
+  function buildExportExcelUrl() {
+    // Endpoint EXCEL di server (gunakan params filter yang sama; all=1 untuk semua baris)
+    // GET /export/mental_rekap.xlsx?q=&angkatan=&sort_by=&sort_dir=&all=1
+    const u = new URL(`${API}/export/mental_rekap.xlsx`);
+    if (q) u.searchParams.set("q", q);
+    if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
+    u.searchParams.set("sort_by", sortBy);
+    u.searchParams.set("sort_dir", sortDir);
+    u.searchParams.set("all", "1");
+    return u.toString();
+  }
+
+  async function exportExcelAll() {
+    try {
+      const url = buildExportExcelUrl();
+      const ts = new Date();
+      const y = ts.getFullYear();
+      const m = String(ts.getMonth() + 1).padStart(2, "0");
+      const d = String(ts.getDate()).padStart(2, "0");
+      const hh = String(ts.getHours()).padStart(2, "0");
+      const mm = String(ts.getMinutes()).padStart(2, "0");
+      const ss = String(ts.getSeconds()).padStart(2, "0");
+      const labelAngkatan = angkatanEffective ? `-angkatan-${angkatanEffective}` : "";
+      const fname = `rekap-mental${labelAngkatan}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
+
+      setDlMsg("Menyiapkan file untuk diunduh…");
+
+      // Coba via Electron (IPC download dengan lokasi simpan terkontrol)
+      if (window.electronAPI?.download) {
+        const res = await window.electronAPI.download(url, fname);
+        if (res?.ok && res.path) {
+          setDlMsg(`✔️ Selesai. Tersimpan di: ${res.path}`);
+          clearMsgLater();
+          return;
+        }
+        // Jika gagal, beri tahu error dari main
+        const msg = res?.message || "Gagal memulai unduhan";
+        setDlMsg(`Gagal mengunduh: ${msg}`);
+        clearMsgLater();
+        return;
+      }
+
+      // Fallback: fetch biasa (mode dev di browser)
+      const token = await window.authAPI?.getToken?.();
+      const r = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!r.ok) {
+        const text = await r.text().catch(() => "");
+        throw new Error(text || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 0);
+      setDlMsg("✔️ Selesai. Cek folder unduhan (Downloads) di browser Anda.");
+      clearMsgLater();
+    } catch (e) {
+      setDlMsg(`Gagal export: ${e.message}`);
+      clearMsgLater();
+    }
+  }
 
   return (
     <>
@@ -225,7 +331,21 @@ export default function RekapMental() {
         <div style={{ marginLeft: "auto", color: "#94a3b8" }}>
           Total: {total}
         </div>
+
+        {/* Tombol Export (single) */}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn" onClick={exportExcelAll} title="Export Excel (semua hasil filter)">
+            Export
+          </button>
+        </div>
       </div>
+
+      {/* Info unduh */}
+      {dlMsg && (
+        <div className="card" style={{ color: dlMsg.startsWith("✔") ? "#86efac" : "#cbd5e1" }}>
+          {dlMsg}
+        </div>
+      )}
 
       {/* Table */}
       <div className="card" style={{ padding: 0 }}>

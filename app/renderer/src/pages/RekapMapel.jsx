@@ -1,3 +1,4 @@
+// src/pages/RekapMapel.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useShell } from "../context/ShellContext";
 
@@ -28,7 +29,11 @@ export default function RekapMapel() {
 
   const [weekColumns, setWeekColumns] = useState([]); // daftar pertemuan (1,2,3,...)
 
-  // ==== opsi angkatan (persis seperti RekapMental.jsx)
+  // status export (notif kecil)
+  const [exportInfo, setExportInfo] = useState(null);
+  const [exporting, setExporting] = useState(false);
+
+  // ==== opsi angkatan
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -42,13 +47,9 @@ export default function RekapMapel() {
         });
         const data = await r.json();
         if (alive) setAngkatanOpts(Array.isArray(data.items) ? data.items : []);
-      } catch {
-        // abaikan
-      }
+      } catch {}
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   // ==== opsi mapel (opsional; fallback derive dari data)
@@ -67,21 +68,18 @@ export default function RekapMapel() {
         const data = await r.json();
         const opts = Array.isArray(data.items) ? data.items : [];
         if (alive && opts.length) {
-          setMapelOpts(opts.map(String).sort((a, b) => a.localeCompare(b)));
-          if (!mapelFilter) setMapelFilter(opts[0]);
+          const sorted = opts.map(String).sort((a, b) => a.localeCompare(b));
+          setMapelOpts(sorted);
+          if (!mapelFilter) setMapelFilter(sorted[0]);
         }
-      } catch {
-        // abaikan
-      }
+      } catch {}
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   const angkatanEffective = angkatanFilter || angkatanFromShell || "";
 
-  // ==== URL request rekap mapel (mirip mental)
+  // ==== URL data (rekap)
   const url = useMemo(() => {
     const u = new URL(`${API}/mapel/rekap`);
     if (q) u.searchParams.set("q", q);
@@ -103,26 +101,21 @@ export default function RekapMapel() {
         const r = await fetch(url, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        // Bisa 2 tipe response:
+        // Response bisa:
         // A) { items, total, weeks }
         // B) [ flat rows ... ]
         const data = await r.json();
         if (!alive) return;
 
-        // ---- Tipe A (mirip mental.rekap)
         if (data && Array.isArray(data.items)) {
           const arr = data.items;
           setItems(arr);
           setTotal(data.total ?? arr.length ?? 0);
 
-          // weeks dari server (angka pertemuan) atau derive dari arr
           let weeks = Array.isArray(data.weeks) ? data.weeks : [];
-          if (!weeks.length) {
-            weeks = deriveWeeksFromItems(arr);
-          }
+          if (!weeks.length) weeks = deriveWeeksFromItems(arr);
           setWeekColumns(weeks);
 
-          // derive mapelOpts kalau belum ada
           if (mapelOpts.length === 0) {
             const derived = deriveMapelsFromItems(arr);
             if (derived.length) {
@@ -133,10 +126,9 @@ export default function RekapMapel() {
           return;
         }
 
-        // ---- Tipe B (flat rows → pivot di FE)
         if (Array.isArray(data)) {
           const flat = data;
-          // derive mapel list kalau belum
+
           if (mapelOpts.length === 0) {
             const derived = deriveMapelsFromFlat(flat);
             if (derived.length) {
@@ -145,7 +137,6 @@ export default function RekapMapel() {
             }
           }
 
-          // filter by mapel (kalau ada)
           const flatFiltered = mapelFilter
             ? flat.filter((r) => (r.mapel || "") === mapelFilter)
             : flat;
@@ -157,7 +148,6 @@ export default function RekapMapel() {
           return;
         }
 
-        // fallback
         setItems([]);
         setTotal(0);
         setWeekColumns([]);
@@ -168,18 +158,86 @@ export default function RekapMapel() {
         setWeekColumns([]);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
 
-  // reset page saat filter/sort berubah (sama seperti mental)
   useEffect(() => {
     setPage(1);
   }, [q, angkatanFilter, angkatanFromShell, sortBy, sortDir, mapelFilter]);
 
-  // ==== helpers sticky + format (copy dari RekapMental.jsx)
+  /* =======================
+     EXPORT (1 tombol, semua)
+     ======================= */
+  function buildExportUrl() {
+    const u = new URL(`${API}/export/mapel.xlsx`);
+    if (q) u.searchParams.set("q", q);
+    if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
+    if (mapelFilter) u.searchParams.set("mapel", mapelFilter);
+    u.searchParams.set("sort_by", sortBy);
+    u.searchParams.set("sort_dir", sortDir);
+    u.searchParams.set("all", "1"); // selalu semua baris hasil filter
+    return u.toString();
+  }
+
+  async function downloadViaFetch(url, suggestedName) {
+    const token = await window.authAPI?.getToken?.();
+    const res = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = suggestedName;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 0);
+  }
+
+  async function exportExcelAll() {
+    try {
+      setExporting(true);
+      setExportInfo({ state: "preparing" });
+      const url = buildExportUrl();
+
+      const ts = new Date();
+      const y = ts.getFullYear();
+      const m = String(ts.getMonth() + 1).padStart(2, "0");
+      const d = String(ts.getDate()).padStart(2, "0");
+      const hh = String(ts.getHours()).padStart(2, "0");
+      const mm = String(ts.getMinutes()).padStart(2, "0");
+      const ss = String(ts.getSeconds()).padStart(2, "0");
+      const fname = `mapel${angkatanEffective ? `-angkatan-${angkatanEffective}` : ""}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
+
+      if (window.electronAPI?.download) {
+        await window.electronAPI.download(url); // Electron akan simpan ke Downloads
+        setExportInfo({
+          state: "done",
+          pathHint: "Downloads",
+          filename: "(periksa file terbaru di Downloads)",
+        });
+      } else {
+        await downloadViaFetch(url, fname);
+        setExportInfo({ state: "done", pathHint: "browser", filename: fname });
+      }
+
+      setTimeout(() => setExportInfo(null), 5000);
+    } catch (e) {
+      setExportInfo({ state: "error", message: e.message || "Gagal export." });
+      setTimeout(() => setExportInfo(null), 6000);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  // ==== helpers sticky + format
   const stickyLeftTH = (px) => ({
     position: "sticky",
     top: 0,
@@ -195,31 +253,17 @@ export default function RekapMapel() {
     zIndex: 5,
     boxShadow: px ? "6px 0 10px rgba(0,0,0,.35)" : "none",
   });
-  const stickyTop = {
-    position: "sticky",
-    top: 0,
-    background: "#0b1220",
-    zIndex: 4,
-  };
-  const thBase = {
-    whiteSpace: "nowrap",
-    fontWeight: 700,
-    borderBottom: "1px solid #1f2937",
-  };
-  const numCell = {
-    textAlign: "right",
-    fontVariantNumeric: "tabular-nums",
-    whiteSpace: "nowrap",
-  };
+  const stickyTop = { position: "sticky", top: 0, background: "#0b1220", zIndex: 4 };
+  const thBase = { whiteSpace: "nowrap", fontWeight: 700, borderBottom: "1px solid #1f2937" };
+  const numCell = { textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
 
-  const fmtRank = (r) =>
-    r?.pos != null && r?.total ? `${r.pos}/${r.total}` : "-";
+  const fmtRank = (r) => (r?.pos != null && r?.total ? `${r.pos}/${r.total}` : "-");
   const fmtAvg = (v) => (v == null ? "-" : Number(v).toFixed(3));
   const fmtSum = (v) => (v == null ? "-" : Number(v).toFixed(3));
 
   return (
     <>
-      {/* Toolbar: sama seperti Mental, ditambah Mapel */}
+      {/* Toolbar */}
       <div
         className="card"
         style={{
@@ -232,9 +276,7 @@ export default function RekapMapel() {
       >
         {/* Angkatan */}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label htmlFor="angkatan" className="muted">
-            Angkatan
-          </label>
+          <label htmlFor="angkatan" className="muted">Angkatan</label>
           <select
             id="angkatan"
             value={angkatanFilter}
@@ -250,18 +292,14 @@ export default function RekapMapel() {
           >
             <option value="">Semua</option>
             {angkatanOpts.map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
+              <option key={opt} value={opt}>{opt}</option>
             ))}
           </select>
         </div>
 
-        {/* Mapel (opsional) */}
+        {/* Mapel */}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label htmlFor="mapel" className="muted">
-            Mapel
-          </label>
+          <label htmlFor="mapel" className="muted">Mapel</label>
           <select
             id="mapel"
             value={mapelFilter}
@@ -277,9 +315,7 @@ export default function RekapMapel() {
           >
             <option value="">(Semua / auto)</option>
             {mapelOpts.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
+              <option key={m} value={m}>{m}</option>
             ))}
           </select>
         </div>
@@ -330,128 +366,60 @@ export default function RekapMapel() {
           <option value="desc">Desc</option>
         </select>
 
-        <div style={{ marginLeft: "auto", color: "#94a3b8" }}>
-          Total: {total}
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            className="btn"
+            onClick={exportExcelAll}
+            disabled={exporting}
+            title="Export Excel (semua hasil filter)"
+          >
+            {exporting ? "Menyiapkan…" : "Export Excel"}
+          </button>
+
+          <div className="muted">Total: {total}</div>
         </div>
       </div>
 
-      {/* Table (sticky seperti Mental) */}
+      {/* Notif Export */}
+      {exportInfo && (
+        <div
+          className="card"
+          style={{
+            marginBottom: 12,
+            border: exportInfo.state === "error" ? "1px solid #7f1d1d" : "1px solid #1f2937",
+            background: exportInfo.state === "error" ? "#2a0b0b" : "#0f1424",
+            color: exportInfo.state === "error" ? "#fecaca" : "#e5e7eb",
+          }}
+          role="status"
+          aria-live="polite"
+        >
+          {exportInfo.state === "preparing" && "Menyiapkan file export…"}
+          {exportInfo.state === "done" &&
+            `File export dikirim ke ${exportInfo.pathHint}. ${exportInfo.filename || ""}`}
+          {exportInfo.state === "error" && `Gagal export: ${exportInfo.message}`}
+        </div>
+      )}
+
+      {/* Table */}
       <div className="card" style={{ padding: 0 }}>
         <div style={{ overflow: "auto" }}>
           <table
             className="table"
-            style={{
-              width: "100%",
-              minWidth: 1300,
-              borderCollapse: "separate",
-              borderSpacing: 0,
-            }}
+            style={{ width: "100%", minWidth: 1300, borderCollapse: "separate", borderSpacing: 0 }}
           >
             <thead>
               <tr>
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyLeftTH(0),
-                    minWidth: W_NOSIS,
-                    width: W_NOSIS,
-                  }}
-                >
-                  NOSIS
-                </th>
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyLeftTH(W_NOSIS),
-                    minWidth: W_NAMA,
-                    width: W_NAMA,
-                  }}
-                >
-                  Nama
-                </th>
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyTop,
-                    textAlign: "left",
-                    minWidth: 110,
-                  }}
-                >
-                  Angkatan
-                </th>
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyTop,
-                    ...numCell,
-                    minWidth: W_NUM,
-                  }}
-                >
-                  Jumlah
-                </th>
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyTop,
-                    ...numCell,
-                    minWidth: W_NUM,
-                  }}
-                >
-                  Rata-rata
-                </th>
-
-                {/* Rank opsional (kalau backend sediakan) */}
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyTop,
-                    textAlign: "center",
-                    minWidth: 110,
-                  }}
-                >
-                  R. Global
-                </th>
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyTop,
-                    textAlign: "center",
-                    minWidth: 110,
-                  }}
-                >
-                  R. Batalion
-                </th>
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyTop,
-                    textAlign: "center",
-                    minWidth: 100,
-                  }}
-                >
-                  R. Kompi
-                </th>
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyTop,
-                    textAlign: "center",
-                    minWidth: 110,
-                  }}
-                >
-                  R. Pleton
-                </th>
-
+                <th style={{ ...thBase, ...stickyLeftTH(0), minWidth: W_NOSIS, width: W_NOSIS }}>NOSIS</th>
+                <th style={{ ...thBase, ...stickyLeftTH(W_NOSIS), minWidth: W_NAMA, width: W_NAMA }}>Nama</th>
+                <th style={{ ...thBase, ...stickyTop, textAlign: "left", minWidth: 110 }}>Angkatan</th>
+                <th style={{ ...thBase, ...stickyTop, ...numCell, minWidth: W_NUM }}>Jumlah</th>
+                <th style={{ ...thBase, ...stickyTop, ...numCell, minWidth: W_NUM }}>Rata-rata</th>
+                <th style={{ ...thBase, ...stickyTop, textAlign: "center", minWidth: 110 }}>R. Global</th>
+                <th style={{ ...thBase, ...stickyTop, textAlign: "center", minWidth: 110 }}>R. Batalion</th>
+                <th style={{ ...thBase, ...stickyTop, textAlign: "center", minWidth: 100 }}>R. Kompi</th>
+                <th style={{ ...thBase, ...stickyTop, textAlign: "center", minWidth: 110 }}>R. Pleton</th>
                 {weekColumns.map((w) => (
-                  <th
-                    key={`wh-${w}`}
-                    style={{
-                      ...thBase,
-                      ...stickyTop,
-                      textAlign: "right",
-                      minWidth: 90,
-                    }}
-                  >
+                  <th key={`wh-${w}`} style={{ ...thBase, ...stickyTop, textAlign: "right", minWidth: 90 }}>
                     {w}
                   </th>
                 ))}
@@ -460,11 +428,7 @@ export default function RekapMapel() {
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td
-                    colSpan={9 + weekColumns.length}
-                    className="muted"
-                    style={{ padding: 12 }}
-                  >
+                  <td colSpan={9 + weekColumns.length} className="muted" style={{ padding: 12 }}>
                     Tidak ada data.
                   </td>
                 </tr>
@@ -473,46 +437,17 @@ export default function RekapMapel() {
                   const weeks = r?.weeks || {};
                   return (
                     <tr key={`${r.nosis}-${i}`}>
-                      <td
-                        style={{
-                          ...stickyLeftTD(0),
-                          minWidth: W_NOSIS,
-                          width: W_NOSIS,
-                        }}
-                      >
-                        {r.nosis ?? "-"}
-                      </td>
-                      <td
-                        style={{
-                          ...stickyLeftTD(W_NOSIS),
-                          minWidth: W_NAMA,
-                          width: W_NAMA,
-                        }}
-                      >
-                        {r.nama ?? "-"}
-                      </td>
+                      <td style={{ ...stickyLeftTD(0), minWidth: W_NOSIS, width: W_NOSIS }}>{r.nosis ?? "-"}</td>
+                      <td style={{ ...stickyLeftTD(W_NOSIS), minWidth: W_NAMA, width: W_NAMA }}>{r.nama ?? "-"}</td>
                       <td style={{ whiteSpace: "nowrap" }}>
                         {r.kelompok_angkatan ?? r.angkatan ?? "-"}
                       </td>
-                      <td style={{ ...numCell }}>
-                        {fmtSum(r.sum ?? r.jumlah)}
-                      </td>
+                      <td style={{ ...numCell }}>{fmtSum(r.sum ?? r.jumlah)}</td>
                       <td style={{ ...numCell }}>{fmtAvg(r.avg ?? r.rata2)}</td>
-
-                      {/* rank opsional */}
-                      <td style={{ textAlign: "center" }}>
-                        {fmtRank(r.rank?.global)}
-                      </td>
-                      <td style={{ textAlign: "center" }}>
-                        {fmtRank(r.rank?.batalion)}
-                      </td>
-                      <td style={{ textAlign: "center" }}>
-                        {fmtRank(r.rank?.kompi)}
-                      </td>
-                      <td style={{ textAlign: "center" }}>
-                        {fmtRank(r.rank?.pleton)}
-                      </td>
-
+                      <td style={{ textAlign: "center" }}>{fmtRank(r.rank?.global)}</td>
+                      <td style={{ textAlign: "center" }}>{fmtRank(r.rank?.batalion)}</td>
+                      <td style={{ textAlign: "center" }}>{fmtRank(r.rank?.kompi)}</td>
+                      <td style={{ textAlign: "center" }}>{fmtRank(r.rank?.pleton)}</td>
                       {weekColumns.map((w) => (
                         <td key={`wk-${i}-${w}`} style={{ ...numCell }}>
                           {weeks?.[w] ?? weeks?.[String(w)] ?? ""}
@@ -527,23 +462,13 @@ export default function RekapMapel() {
         </div>
       </div>
 
-      {/* Pagination (sama gaya) */}
-      <div
-        style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}
-      >
-        <button
-          className="btn"
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
-          disabled={page <= 1}
-        >
+      {/* Pagination */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+        <button className="btn" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
           Prev
         </button>
         <span className="badge">Page {page}</span>
-        <button
-          className="btn"
-          onClick={() => setPage((p) => p + 1)}
-          disabled={items.length < limit}
-        >
+        <button className="btn" onClick={() => setPage((p) => p + 1)} disabled={items.length < limit}>
           Next
         </button>
       </div>
@@ -567,31 +492,24 @@ function deriveWeeksFromItems(arr) {
 
 function deriveMapelsFromItems(arr) {
   const s = new Set();
-  for (const it of arr) {
-    if (it.mapel) s.add(String(it.mapel));
-  }
+  for (const it of arr) if (it.mapel) s.add(String(it.mapel));
   return Array.from(s).sort((a, b) => a.localeCompare(b));
 }
 
 function deriveMapelsFromFlat(rows) {
   const s = new Set();
-  for (const r of rows) {
-    if (r.mapel) s.add(String(r.mapel));
-  }
+  for (const r of rows) if (r.mapel) s.add(String(r.mapel));
   return Array.from(s).sort((a, b) => a.localeCompare(b));
 }
 
 function pivotFlatRows(flatRows, q) {
-  // flatRows: [{nosis,nama,kelompok_angkatan,mapel,pertemuan,nilai}, ...]
   const query = (q || "").trim().toLowerCase();
   const byKey = new Map();
   const weeksSet = new Set();
 
   for (const r of flatRows) {
     if (query) {
-      const hay = `${(r.nama || "").toLowerCase()} ${(
-        r.nosis || ""
-      ).toLowerCase()}`;
+      const hay = `${(r.nama || "").toLowerCase()} ${(r.nosis || "").toLowerCase()}`;
       if (!hay.includes(query)) continue;
     }
     const key = `${r.nosis || ""}||${r.nama || ""}`;
@@ -620,16 +538,10 @@ function pivotFlatRows(flatRows, q) {
   }
 
   const items = Array.from(byKey.values())
-    .map((x) => ({
-      ...x,
-      avg: x._cnt > 0 ? x.sum / x._cnt : null,
-    }))
+    .map((x) => ({ ...x, avg: x._cnt > 0 ? x.sum / x._cnt : null }))
     .sort((a, b) => String(a.nama).localeCompare(String(b.nama)));
 
-  return {
-    items,
-    weeks: Array.from(weeksSet).sort((a, b) => a - b),
-  };
+  return { items, weeks: Array.from(weeksSet).sort((a, b) => a - b) };
 }
 
 function toInt(v) {
@@ -641,12 +553,6 @@ function toNum(v) {
   const f = parseFloat(String(v).replace(",", "."));
   return Number.isFinite(f) ? f : null;
 }
-function fmtRank(r) {
-  return r?.pos != null && r?.total ? `${r.pos}/${r.total}` : "-";
-}
-function fmtAvg(v) {
-  return v == null ? "-" : Number(v).toFixed(3);
-}
-function fmtSum(v) {
-  return v == null ? "-" : Number(v).toFixed(3);
-}
+function fmtRank(r) { return r?.pos != null && r?.total ? `${r.pos}/${r.total}` : "-"; }
+function fmtAvg(v) { return v == null ? "-" : Number(v).toFixed(3); }
+function fmtSum(v) { return v == null ? "-" : Number(v).toFixed(3); }

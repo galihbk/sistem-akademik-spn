@@ -1,12 +1,16 @@
-// controllers/export.controller.js
+// server/src/controllers/export.controller.js
 const path = require("path");
 const fs = require("fs/promises");
 const pool = require("../db/pool");
 const { PDFDocument } = require("pdf-lib");
 const mime = require("mime-types");
 const puppeteer = require("puppeteer");
+const ExcelJS = require("exceljs"); // untuk export Excel
 
-// ---------- helpers ----------
+/* =========================================================================
+   =                         HELPER UMUM (PDF)                             =
+   ========================================================================= */
+
 async function tryReadFileBuffer(rootDir, relPath) {
   try {
     if (!relPath) return null;
@@ -365,8 +369,11 @@ async function mergeWithAttachments(basePdfBuf, attachments) {
   return Buffer.from(finalBuf);
 }
 
-// ---------- controller ----------
-exports.exportAllByNik = async (req, res) => {
+/* =========================================================================
+   =                        CONTROLLER: PDF by NIK                         =
+   ========================================================================= */
+
+async function exportAllByNik(req, res) {
   try {
     const nik = String(req.query.nik || "").trim();
     if (!nik) return res.status(400).send("nik query required");
@@ -414,4 +421,822 @@ exports.exportAllByNik = async (req, res) => {
     console.error("[exportAllByNik] error:", e);
     return res.status(500).send("Gagal membuat PDF");
   }
+}
+
+/* =========================================================================
+   =                 CONTROLLER: Excel daftar siswa (ALL COLS)             =
+   =            (ENDPOINT TETAP: GET /export/siswa.xlsx)                   =
+   ========================================================================= */
+
+function toTitleCase(h) {
+  // "ukuran_tutup_kepala" -> "Ukuran Tutup Kepala"
+  return String(h || "")
+    .split("_")
+    .map((s) => (s ? s[0].toUpperCase() + s.slice(1) : s))
+    .join(" ");
+}
+
+function parseBool(v) {
+  if (v == null) return false;
+  const s = String(v).toLowerCase();
+  return s === "1" || s === "true" || s === "yes";
+}
+
+async function getSiswaColumnsMeta() {
+  // Ambil daftar kolom & tipe data dari tabel siswa sesuai urutan aslinya.
+  const sql = `
+    SELECT column_name, data_type
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'siswa'
+    ORDER BY ordinal_position
+  `;
+  const { rows } = await pool.query(sql);
+  return rows; // [{column_name, data_type}, ...]
+}
+
+async function exportSiswaXlsx(req, res) {
+  try {
+    const q = (req.query.q || "").toString().trim();
+    const angkatan = (req.query.angkatan || "").toString().trim();
+    const all = parseBool(req.query.all);
+
+    // Sorting whitelist (aman)
+    const SORT_WHITELIST = new Map([
+      ["nama", "LOWER(nama)"],
+      ["nosis", "LOWER(nosis)"],
+      ["nik", "LOWER(nik)"],
+      ["created_at", "created_at"],
+      ["updated_at", "updated_at"],
+    ]);
+
+    let sort_by = (req.query.sort_by || "nama").toString();
+    let sort_dir = (req.query.sort_dir || "asc").toString().toLowerCase();
+    sort_dir = sort_dir === "desc" ? "DESC" : "ASC";
+    const sortExpr = SORT_WHITELIST.get(sort_by) || SORT_WHITELIST.get("nama");
+
+    // Pagination (jika all != true)
+    const page = Math.max(1, parseInt(req.query.page || "1", 10));
+    const limit = Math.min(
+      20000,
+      Math.max(1, parseInt(req.query.limit || "1000", 10))
+    );
+    const offset = (page - 1) * limit;
+
+    // WHERE
+    const where = [];
+    const params = [];
+
+    if (angkatan) {
+      params.push(angkatan);
+      where.push(
+        `COALESCE(NULLIF(TRIM(kelompok_angkatan), ''), '') = $${params.length}`
+      );
+    }
+    if (q) {
+      params.push(`%${q.toLowerCase()}%`);
+      where.push(`(
+        LOWER(COALESCE(nama, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(nosis, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(nik, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(email, '')) LIKE $${params.length}
+      )`);
+    }
+
+    const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    // Ambil metadata kolom dinamis
+    const colsMeta = await getSiswaColumnsMeta(); // urut sesuai ordinal_position
+    if (!colsMeta.length) {
+      return res
+        .status(500)
+        .json({ message: "Tidak menemukan metadata kolom siswa." });
+    }
+
+    // Susun SELECT dinamis (nama kolom di-escape pakai double quotes)
+    const selectList = colsMeta.map((c) => `"${c.column_name}"`).join(", ");
+
+    // Query data
+    const sql = `
+      SELECT ${selectList}
+      FROM siswa
+      ${whereSQL}
+      ORDER BY ${sortExpr} ${sort_dir}
+      ${all ? "" : `LIMIT $${params.length + 1} OFFSET $${params.length + 2}`}
+    `;
+
+    const rows = (
+      await pool.query(sql, all ? params : [...params, limit, offset])
+    ).rows;
+
+    // Workbook
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Siswa");
+
+    // Definisikan kolom worksheet sesuai metadata
+    ws.columns = colsMeta.map((c) => ({
+      header: toTitleCase(c.column_name),
+      key: c.column_name,
+      width: Math.min(40, Math.max(10, c.column_name.length + 4)),
+    }));
+    ws.getRow(1).font = { bold: true };
+
+    // Isi baris data
+    for (const r of rows) {
+      const obj = {};
+      for (const c of colsMeta) {
+        const name = c.column_name;
+        const dtype = String(c.data_type).toLowerCase();
+        const val = r[name];
+
+        if (val == null) {
+          obj[name] = null;
+        } else if (dtype.includes("timestamp") || dtype.includes("date")) {
+          const d = new Date(val);
+          obj[name] = isNaN(d) ? String(val) : d;
+        } else {
+          obj[name] = val;
+        }
+      }
+      ws.addRow(obj);
+    }
+
+    // Format kolom bertipe tanggal/waktu
+    colsMeta.forEach((c, idx) => {
+      const dtype = String(c.data_type).toLowerCase();
+      if (dtype.includes("timestamp") || dtype.includes("date")) {
+        ws.getColumn(idx + 1).numFmt = "yyyy-mm-dd hh:mm";
+      }
+    });
+
+    // Nama file
+    const ts = new Date();
+    const y = ts.getFullYear();
+    const m = String(ts.getMonth() + 1).padStart(2, "0");
+    const d = String(ts.getDate()).padStart(2, "0");
+    const hh = String(ts.getHours()).padStart(2, "0");
+    const mm = String(ts.getMinutes()).padStart(2, "0");
+    const ss = String(ts.getSeconds()).padStart(2, "0");
+    const labelAngkatan = angkatan ? `-angkatan-${angkatan}` : "";
+    const fname = `siswa-ALLCOLS${labelAngkatan}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${fname}"`
+    );
+
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    console.error("[export.siswa.xlsx]", e);
+    res.status(500).json({ message: "Gagal membuat Excel." });
+  }
+}
+
+/* =========================================================================
+   =                 CONTROLLER: Excel Rekap Mental (filter)               =
+   =          ENDPOINT: GET /export/mental_rekap.xlsx?all=1                =
+   ========================================================================= */
+
+function sanitizeSort({ sort_by, sort_dir }) {
+  const sortCols = new Set(["nama", "nosis"]);
+  const col = sortCols.has((sort_by || "").toLowerCase()) ? sort_by : "nama";
+  const dir = (String(sort_dir || "asc").toLowerCase() === "desc") ? "DESC" : "ASC";
+  return { col, dir };
+}
+
+async function exportMentalRekapExcel(req, res) {
+  try {
+    const q = (req.query.q || "").trim();
+    const angkatan = (req.query.angkatan || "").trim();
+    const { col: sortCol, dir: sortDir } = sanitizeSort({
+      sort_by: req.query.sort_by,
+      sort_dir: req.query.sort_dir,
+    });
+
+    // ---- filter & param
+    const where = [];
+    const params = [];
+    let p = 1;
+
+    if (angkatan) {
+      where.push(`COALESCE(s.kelompok_angkatan,'') = $${p++}`);
+      params.push(angkatan);
+    }
+    if (q) {
+      where.push(`(LOWER(s.nama) LIKE LOWER($${p}) OR LOWER(s.nosis) LIKE LOWER($${p}))`);
+      params.push(`%${q}%`);
+      p++;
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    // ---- 1) ambil daftar minggu
+    const weeksSql = `
+      SELECT DISTINCT m.minggu_ke
+      FROM mental m
+      JOIN siswa s ON s.id = m.siswa_id
+      ${whereSql}
+      ORDER BY 1 ASC
+    `;
+    const weekRes = await pool.query(weeksSql, params);
+    const weeks = weekRes.rows
+      .map((r) => Number(r.minggu_ke))
+      .filter((n) => Number.isFinite(n))
+      .sort((a, b) => a - b);
+
+    // ---- 2) query utama (PERBAIKAN: pakai alias 'b' di pivotExprs)
+    const pivotExprs = weeks.map(
+      (w) =>
+        `MAX(CASE WHEN b.minggu_ke = ${w} THEN b.nilai_num END) AS "Minggu ${w}"`
+    ).join(",\n          ");
+
+    const sql = `
+      WITH base AS (
+        SELECT
+          s.id AS siswa_id,
+          s.nosis,
+          s.nama,
+          s.kelompok_angkatan,
+          s.batalion,
+          s.ton,
+          UPPER(NULLIF(regexp_replace(COALESCE(s.ton,''), '[^A-Za-z].*', ''), '')) AS kompi,
+          CASE
+            WHEN regexp_replace(COALESCE(s.ton,''), '\\D+', '', 'g') <> '' THEN
+              (regexp_replace(s.ton, '\\D+', '', 'g'))::int
+            ELSE NULL
+          END AS pleton,
+          (CASE WHEN m.nilai ~ '^-?\\d+(\\.\\d+)?$' THEN m.nilai::numeric ELSE NULL END) AS nilai_num,
+          m.minggu_ke
+        FROM mental m
+        JOIN siswa s ON s.id = m.siswa_id
+        ${whereSql}
+      ),
+      agg AS (
+        SELECT
+          siswa_id, nosis, nama, kelompok_angkatan, batalion, ton, kompi, pleton,
+          SUM(nilai_num)::numeric(20,3) AS sum_nilai,
+          AVG(nilai_num)::numeric(20,3) AS avg_nilai
+        FROM base
+        GROUP BY siswa_id, nosis, nama, kelompok_angkatan, batalion, ton, kompi, pleton
+      ),
+      ranks AS (
+        SELECT
+          a.*,
+          RANK() OVER (ORDER BY a.avg_nilai DESC NULLS LAST) AS rk_global,
+          COUNT(*) OVER () AS total_global,
+          RANK() OVER (PARTITION BY a.batalion ORDER BY a.avg_nilai DESC NULLS LAST) AS rk_batalion,
+          COUNT(*) OVER (PARTITION BY a.batalion) AS total_batalion,
+          RANK() OVER (PARTITION BY a.kompi ORDER BY a.avg_nilai DESC NULLS LAST) AS rk_kompi,
+          COUNT(*) OVER (PARTITION BY a.kompi) AS total_kompi,
+          RANK() OVER (PARTITION BY a.pleton ORDER BY a.avg_nilai DESC NULLS LAST) AS rk_pleton,
+          COUNT(*) OVER (PARTITION BY a.pleton) AS total_pleton
+        FROM agg a
+      ),
+      pivot AS (
+        SELECT
+          b.siswa_id
+          ${weeks.length ? "," : ""}
+          ${weeks.length ? pivotExprs : "NULL::numeric AS _no_weeks_"}
+        FROM base b
+        GROUP BY b.siswa_id
+      )
+      SELECT
+        r.nosis, r.nama, r.kelompok_angkatan,
+        r.batalion, r.kompi, r.pleton,
+        r.sum_nilai, r.avg_nilai,
+        r.rk_global, r.total_global,
+        r.rk_batalion, r.total_batalion,
+        r.rk_kompi, r.total_kompi,
+        r.rk_pleton, r.total_pleton
+        ${weeks.length ? "," : ""}
+        ${weeks.map((w) => `"Minggu ${w}"`).join(", ")}
+      FROM ranks r
+      LEFT JOIN pivot p ON p.siswa_id = r.siswa_id
+      ORDER BY ${sortCol === "nosis" ? "r.nosis" : "r.nama"} ${sortDir}, r.nosis ASC
+    `;
+
+    const dataRes = await pool.query(sql, params);
+    const rows = dataRes.rows || [];
+
+    // ---- 3) build Excel
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Rekap Mental");
+
+    const baseCols = [
+      { header: "NOSIS", key: "nosis", width: 16 },
+      { header: "Nama", key: "nama", width: 28 },
+      { header: "Angkatan", key: "kelompok_angkatan", width: 14 },
+      { header: "Batalion", key: "batalion", width: 12 },
+      { header: "Kompi", key: "kompi", width: 10 },
+      { header: "Pleton", key: "pleton", width: 10 },
+      { header: "Jumlah", key: "sum_nilai", width: 14, style: { numFmt: "0.000" } },
+      { header: "Rata-rata", key: "avg_nilai", width: 14, style: { numFmt: "0.000" } },
+      { header: "R. Global", key: "rk_global_disp", width: 12 },
+      { header: "R. Batalion", key: "rk_batalion_disp", width: 12 },
+      { header: "R. Kompi", key: "rk_kompi_disp", width: 12 },
+      { header: "R. Pleton", key: "rk_pleton_disp", width: 12 },
+    ];
+    const weekCols = weeks.map((w) => ({
+      header: `Minggu ${w}`,
+      key: `minggu_${w}`,
+      width: 12,
+      style: { numFmt: "0.000" },
+    }));
+    ws.columns = [...baseCols, ...weekCols];
+    ws.getRow(1).font = { bold: true };
+
+    for (const r of rows) {
+      const obj = {
+        nosis: r.nosis ?? "",
+        nama: r.nama ?? "",
+        kelompok_angkatan: r.kelompok_angkatan ?? "",
+        batalion: r.batalion ?? "",
+        kompi: r.kompi ?? "",
+        pleton: r.pleton ?? "",
+        sum_nilai: r.sum_nilai != null ? Number(r.sum_nilai) : null,
+        avg_nilai: r.avg_nilai != null ? Number(r.avg_nilai) : null,
+        rk_global_disp:
+          r.rk_global != null && r.total_global ? `${r.rk_global}/${r.total_global}` : "-",
+        rk_batalion_disp:
+          r.rk_batalion != null && r.total_batalion ? `${r.rk_batalion}/${r.total_batalion}` : "-",
+        rk_kompi_disp:
+          r.rk_kompi != null && r.total_kompi ? `${r.rk_kompi}/${r.total_kompi}` : "-",
+        rk_pleton_disp:
+          r.rk_pleton != null && r.total_pleton ? `${r.rk_pleton}/${r.total_pleton}` : "-",
+      };
+      for (const w of weeks) {
+        const colName = `Minggu ${w}`;
+        obj[`minggu_${w}`] = r[colName] != null ? Number(r[colName]) : null;
+      }
+      ws.addRow(obj);
+    }
+
+    const ts = new Date();
+    const y = ts.getFullYear();
+    const m = String(ts.getMonth() + 1).padStart(2, "0");
+    const d = String(ts.getDate()).padStart(2, "0");
+    const hh = String(ts.getHours()).padStart(2, "0");
+    const mm = String(ts.getMinutes()).padStart(2, "0");
+    const ss = String(ts.getSeconds()).padStart(2, "0");
+    const labelAngkatan = angkatan ? `-angkatan-${angkatan}` : "";
+    const filename = `rekap-mental${labelAngkatan}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
+
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+
+    await wb.xlsx.write(res);
+    return res.status(200).end();
+  } catch (e) {
+    console.error("[exportMentalRekapExcel] error:", e);
+    return res.status(500).send("Gagal membuat Excel rekap mental");
+  }
+}
+
+// whitelist kolom sort agar aman dari SQL injection
+function sanitizeMapelSort({ sort_by, sort_dir }) {
+  const map = new Map([
+    ["nama", "LOWER(s.nama)"],
+    ["nosis", "LOWER(s.nosis)"],
+    ["mapel", "LOWER(m.mapel)"],
+    ["semester", "LOWER(m.semester)"],
+    ["pertemuan", "m.pertemuan"],
+    ["created_at", "m.created_at"],
+    ["updated_at", "m.updated_at"],
+  ]);
+  const col = map.get(String(sort_by || "nama")) || "LOWER(s.nama)";
+  const dir = String(sort_dir || "asc").toLowerCase() === "desc" ? "DESC" : "ASC";
+  return { col, dir };
+}
+
+async function exportMapelXlsx(req, res) {
+  try {
+    const q = String(req.query.q || "").trim();                  // cari nama/nosis/mapel
+    const angkatan = String(req.query.angkatan || "").trim();    // filter kelompok_angkatan
+    const semester = String(req.query.semester || "").trim();    // opsional
+    const mapelName = String(req.query.mapel || "").trim();      // opsional
+    // NOTE: selalu ekspor semua (abaikan page/limit). Kita tetap baca 'all' bila ada:
+    const all = String(req.query.all || "1") === "1";
+
+    const { col: sortCol, dir: sortDir } = sanitizeMapelSort({
+      sort_by: req.query.sort_by,
+      sort_dir: req.query.sort_dir,
+    });
+
+    const where = [];
+    const params = [];
+    let p = 1;
+
+    if (angkatan) {
+      where.push(`COALESCE(s.kelompok_angkatan, '') = $${p++}`);
+      params.push(angkatan);
+    }
+    if (semester) {
+      where.push(`COALESCE(m.semester, '') = $${p++}`);
+      params.push(semester);
+    }
+    if (mapelName) {
+      where.push(`LOWER(COALESCE(m.mapel,'')) = LOWER($${p++})`);
+      params.push(mapelName);
+    }
+    if (q) {
+      where.push(`(
+        LOWER(COALESCE(s.nama,''))    LIKE LOWER($${p})
+        OR LOWER(COALESCE(s.nosis,'')) LIKE LOWER($${p})
+        OR LOWER(COALESCE(m.mapel,'')) LIKE LOWER($${p})
+      )`);
+      params.push(`%${q}%`);
+      p++;
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    // Query data raw mapel + identitas siswa
+    const sql = `
+      SELECT
+        s.nosis,
+        s.nama,
+        s.kelompok_angkatan,
+        s.batalion,
+        s.ton,
+        m.mapel,
+        m.semester,
+        m.pertemuan,
+        m.nilai,
+        m.catatan,
+        m.created_at,
+        m.updated_at
+      FROM mapel m
+      JOIN siswa s ON s.id = m.siswa_id
+      ${whereSql}
+      ORDER BY ${sortCol} ${sortDir}, s.nosis ASC, m.mapel ASC, m.pertemuan ASC
+      ${all ? "" : "LIMIT 1000"}
+    `;
+    const { rows } = await pool.query(sql, params);
+
+    // Build workbook -> buffer
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Mapel");
+
+    ws.columns = [
+      { header: "NOSIS", key: "nosis", width: 14 },
+      { header: "Nama", key: "nama", width: 28 },
+      { header: "Angkatan", key: "kelompok_angkatan", width: 14 },
+      { header: "Batalion", key: "batalion", width: 12 },
+      { header: "Ton", key: "ton", width: 10 },
+      { header: "Mapel", key: "mapel", width: 20 },
+      { header: "Semester", key: "semester", width: 12 },
+      { header: "Pertemuan", key: "pertemuan", width: 12 },
+      { header: "Nilai", key: "nilai", width: 12 },
+      { header: "Catatan", key: "catatan", width: 30 },
+      { header: "Created At", key: "created_at", width: 20, style: { numFmt: "yyyy-mm-dd hh:mm" } },
+      { header: "Updated At", key: "updated_at", width: 20, style: { numFmt: "yyyy-mm-dd hh:mm" } },
+    ];
+    ws.getRow(1).font = { bold: true };
+
+    for (const r of rows) {
+      ws.addRow({
+        nosis: r.nosis ?? "",
+        nama: r.nama ?? "",
+        kelompok_angkatan: r.kelompok_angkatan ?? "",
+        batalion: r.batalion ?? "",
+        ton: r.ton ?? "",
+        mapel: r.mapel ?? "",
+        semester: r.semester ?? "",
+        pertemuan: r.pertemuan ?? null,
+        nilai: r.nilai ?? "",
+        catatan: r.catatan ?? "",
+        created_at: r.created_at ? new Date(r.created_at) : null,
+        updated_at: r.updated_at ? new Date(r.updated_at) : null,
+      });
+    }
+
+    const ts = new Date();
+    const y = ts.getFullYear();
+    const m = String(ts.getMonth() + 1).padStart(2, "0");
+    const d = String(ts.getDate()).padStart(2, "0");
+    const hh = String(ts.getHours()).padStart(2, "0");
+    const mm = String(ts.getMinutes()).padStart(2, "0");
+    const ss = String(ts.getSeconds()).padStart(2, "0");
+    const labelAngkatan = angkatan ? `-angkatan-${angkatan}` : "";
+    const fname = `mapel${labelAngkatan}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
+
+    const arrBuf = await wb.xlsx.writeBuffer();
+    const nodeBuf = Buffer.from(arrBuf);
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Length", String(nodeBuf.length));
+    res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+    return res.status(200).send(nodeBuf);
+  } catch (e) {
+    console.error("[export.mapel.xlsx]", e);
+    return res.status(500).send("Gagal membuat Excel Mapel.");
+  }
+};
+
+// ---------- helper: apakah tabel punya kolom tertentu ----------
+async function tableHasColumn(tableName, columnName) {
+  const sql = `
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema='public' AND table_name=$1 AND column_name=$2
+    LIMIT 1
+  `;
+  const { rows } = await pool.query(sql, [tableName, columnName]);
+  return rows.length > 0;
+}
+
+// ---------- helper: whitelist sort ----------
+function sanitizeSimpleSort({ sort_by, sort_dir }) {
+  const col = String(sort_by || "nama").toLowerCase() === "nosis" ? "nosis" : "nama";
+  const dir = String(sort_dir || "asc").toLowerCase() === "desc" ? "DESC" : "ASC";
+  return { col, dir };
+}
+
+async function exportJasmaniRekapExcel(req, res) {
+  try {
+    const q = String(req.query.q || "").trim();
+    const angkatan = String(req.query.angkatan || "").trim();
+    const tahapInput = String(req.query.tahap ?? "").trim(); // "" = auto jika kolom ada
+    const { col: sortCol, dir: sortDir } = sanitizeSimpleSort({
+      sort_by: req.query.sort_by,
+      sort_dir: req.query.sort_dir,
+    });
+
+    // WHERE dasar (filter siswa)
+    const whereParts = [];
+    const params = [];
+    let p = 1;
+
+    if (angkatan) {
+      whereParts.push(`COALESCE(s.kelompok_angkatan,'') = $${p++}`);
+      params.push(angkatan);
+    }
+    if (q) {
+      whereParts.push(`(LOWER(s.nama) LIKE LOWER($${p}) OR LOWER(s.nosis) LIKE LOWER($${p}))`);
+      params.push(`%${q}%`);
+      p++;
+    }
+    const whereSQL = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+
+    // Cek apakah ada kolom `tahap`
+    const hasTahap = await tableHasColumn("jasmani", "tahap");
+
+    // Tentukan tahapFinal bila kolom ada
+    let tahapFinal = null;
+    if (hasTahap) {
+      if (tahapInput !== "") {
+        const n = parseInt(tahapInput, 10);
+        if (Number.isFinite(n)) tahapFinal = n;
+      }
+      if (tahapFinal == null) {
+        const maxSql = `
+          SELECT MAX(j.tahap)::int AS max_tahap
+          FROM jasmani j
+          JOIN siswa s ON s.id = j.siswa_id
+          ${whereSQL}
+        `;
+        const maxRes = await pool.query(maxSql, params);
+        tahapFinal = maxRes.rows?.[0]?.max_tahap ?? null;
+        if (tahapFinal == null) {
+          // tidak ada data untuk filter tsb
+          res.setHeader(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          );
+          res.setHeader("Content-Disposition", `attachment; filename="rekap-jasmani-empty.xlsx"`);
+          const wbEmpty = new ExcelJS.Workbook();
+          wbEmpty.addWorksheet("Rekap Jasmani").addRow(["Tidak ada data"]);
+          await wbEmpty.xlsx.write(res);
+          return res.end();
+        }
+      }
+    }
+
+    // SQL utama: dua jalur (punya tahap vs tidak)
+    const sql = hasTahap
+      ? `
+        WITH base AS (
+          SELECT
+            s.id AS siswa_id,
+            s.nosis,
+            s.nama,
+            s.kelompok_angkatan,
+            s.batalion,
+            s.ton,
+            UPPER(NULLIF(regexp_replace(COALESCE(s.ton,''), '[^A-Za-z].*', ''), '')) AS kompi,
+            CASE
+              WHEN regexp_replace(COALESCE(s.ton,''), '\\D+', '', 'g') <> '' THEN
+                (regexp_replace(s.ton, '\\D+', '', 'g'))::int
+              ELSE NULL
+            END AS pleton,
+            j.tahap,
+            NULLIF(j.lari_12_menit_ts, '')::numeric   AS lari_12_menit_ts,
+            NULLIF(j.lari_12_menit_rs, '')::numeric   AS lari_12_menit_rs,
+            NULLIF(j.sit_up_ts, '')::numeric          AS sit_up_ts,
+            NULLIF(j.sit_up_rs, '')::numeric          AS sit_up_rs,
+            NULLIF(j.shuttle_run_ts, '')::numeric     AS shuttle_run_ts,
+            NULLIF(j.shuttle_run_rs, '')::numeric     AS shuttle_run_rs,
+            NULLIF(j.push_up_ts, '')::numeric         AS push_up_ts,
+            NULLIF(j.push_up_rs, '')::numeric         AS push_up_rs,
+            NULLIF(j.pull_up_ts, '')::numeric         AS pull_up_ts,
+            NULLIF(j.pull_up_rs, '')::numeric         AS pull_up_rs,
+            NULLIF(j.nilai_akhir, '')::numeric        AS nilai_akhir,
+            j.keterangan
+          FROM jasmani j
+          JOIN siswa s ON s.id = j.siswa_id
+          ${whereSQL}
+            ${whereSQL ? "AND" : "WHERE"} j.tahap = $${p}
+        ),
+        ranked AS (
+          SELECT
+            b.*,
+            RANK() OVER (ORDER BY b.nilai_akhir DESC NULLS LAST) AS rk_global,
+            COUNT(*) OVER () AS total_global,
+            RANK() OVER (PARTITION BY b.batalion ORDER BY b.nilai_akhir DESC NULLS LAST) AS rk_batalion,
+            COUNT(*) OVER (PARTITION BY b.batalion) AS total_batalion,
+            RANK() OVER (PARTITION BY b.kompi ORDER BY b.nilai_akhir DESC NULLS LAST) AS rk_kompi,
+            COUNT(*) OVER (PARTITION BY b.kompi) AS total_kompi,
+            RANK() OVER (PARTITION BY b.pleton ORDER BY b.nilai_akhir DESC NULLS LAST) AS rk_pleton,
+            COUNT(*) OVER (PARTITION BY b.pleton) AS total_pleton
+          FROM base b
+        )
+        SELECT *
+        FROM ranked
+        ORDER BY ${sortCol === "nosis" ? "nosis" : "nama"} ${sortDir}, nosis ASC
+      `
+      : `
+        -- Tidak ada kolom tahap: ambil baris TERBARU per siswa (created_at paling baru)
+        WITH latest AS (
+          SELECT DISTINCT ON (j.siswa_id)
+            j.* 
+          FROM jasmani j
+          ORDER BY j.siswa_id, j.created_at DESC
+        ),
+        base AS (
+          SELECT
+            s.id AS siswa_id,
+            s.nosis,
+            s.nama,
+            s.kelompok_angkatan,
+            s.batalion,
+            s.ton,
+            UPPER(NULLIF(regexp_replace(COALESCE(s.ton,''), '[^A-Za-z].*', ''), '')) AS kompi,
+            CASE
+              WHEN regexp_replace(COALESCE(s.ton,''), '\\D+', '', 'g') <> '' THEN
+                (regexp_replace(s.ton, '\\D+', '', 'g'))::int
+              ELSE NULL
+            END AS pleton,
+            NULL::int AS tahap,
+            NULLIF(l.lari_12_menit_ts, '')::numeric   AS lari_12_menit_ts,
+            NULLIF(l.lari_12_menit_rs, '')::numeric   AS lari_12_menit_rs,
+            NULLIF(l.sit_up_ts, '')::numeric          AS sit_up_ts,
+            NULLIF(l.sit_up_rs, '')::numeric          AS sit_up_rs,
+            NULLIF(l.shuttle_run_ts, '')::numeric     AS shuttle_run_ts,
+            NULLIF(l.shuttle_run_rs, '')::numeric     AS shuttle_run_rs,
+            NULLIF(l.push_up_ts, '')::numeric         AS push_up_ts,
+            NULLIF(l.push_up_rs, '')::numeric         AS push_up_rs,
+            NULLIF(l.pull_up_ts, '')::numeric         AS pull_up_ts,
+            NULLIF(l.pull_up_rs, '')::numeric         AS pull_up_rs,
+            NULLIF(l.nilai_akhir, '')::numeric        AS nilai_akhir,
+            l.keterangan
+          FROM latest l
+          JOIN siswa s ON s.id = l.siswa_id
+          ${whereSQL}
+        ),
+        ranked AS (
+          SELECT
+            b.*,
+            RANK() OVER (ORDER BY b.nilai_akhir DESC NULLS LAST) AS rk_global,
+            COUNT(*) OVER () AS total_global,
+            RANK() OVER (PARTITION BY b.batalion ORDER BY b.nilai_akhir DESC NULLS LAST) AS rk_batalion,
+            COUNT(*) OVER (PARTITION BY b.batalion) AS total_batalion,
+            RANK() OVER (PARTITION BY b.kompi ORDER BY b.nilai_akhir DESC NULLS LAST) AS rk_kompi,
+            COUNT(*) OVER (PARTITION BY b.kompi) AS total_kompi,
+            RANK() OVER (PARTITION BY b.pleton ORDER BY b.nilai_akhir DESC NULLS LAST) AS rk_pleton,
+            COUNT(*) OVER (PARTITION BY b.pleton) AS total_pleton
+          FROM base b
+        )
+        SELECT *
+        FROM ranked
+        ORDER BY ${sortCol === "nosis" ? "nosis" : "nama"} ${sortDir}, nosis ASC
+      `;
+
+    const { rows } = await pool.query(sql, hasTahap ? [...params, tahapFinal] : params);
+
+    // Build Excel
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Rekap Jasmani");
+
+    ws.columns = [
+      { header: "NOSIS", key: "nosis", width: 14 },
+      { header: "Nama", key: "nama", width: 28 },
+      { header: "Angkatan", key: "kelompok_angkatan", width: 14 },
+      { header: "Batalion", key: "batalion", width: 12 },
+      { header: "Kompi", key: "kompi", width: 10 },
+      { header: "Pleton", key: "pleton", width: 10 },
+      { header: "Tahap", key: "tahap", width: 8 },
+
+      { header: "R. Global", key: "rk_global_disp", width: 12 },
+      { header: "R. Batalion", key: "rk_batalion_disp", width: 12 },
+      { header: "R. Kompi", key: "rk_kompi_disp", width: 12 },
+      { header: "R. Pleton", key: "rk_pleton_disp", width: 12 },
+
+      { header: "Lari 12' TS", key: "lari_12_menit_ts", width: 12 },
+      { header: "Lari 12' RS", key: "lari_12_menit_rs", width: 12 },
+      { header: "Sit Up TS", key: "sit_up_ts", width: 12 },
+      { header: "Sit Up RS", key: "sit_up_rs", width: 12 },
+      { header: "Shuttle Run TS", key: "shuttle_run_ts", width: 14 },
+      { header: "Shuttle Run RS", key: "shuttle_run_rs", width: 14 },
+      { header: "Push Up TS", key: "push_up_ts", width: 12 },
+      { header: "Push Up RS", key: "push_up_rs", width: 12 },
+      { header: "Pull Up TS", key: "pull_up_ts", width: 12 },
+      { header: "Pull Up RS", key: "pull_up_rs", width: 12 },
+
+      { header: "Nilai Akhir", key: "nilai_akhir", width: 14 },
+      { header: "Keterangan", key: "keterangan", width: 30 },
+    ];
+    ws.getRow(1).font = { bold: true };
+
+    for (const r of rows) {
+      ws.addRow({
+        nosis: r.nosis ?? "",
+        nama: r.nama ?? "",
+        kelompok_angkatan: r.kelompok_angkatan ?? "",
+        batalion: r.batalion ?? "",
+        kompi: r.kompi ?? "",
+        pleton: r.pleton ?? "",
+        tahap: r.tahap ?? null,
+
+        rk_global_disp:
+          r.rk_global != null && r.total_global ? `${r.rk_global}/${r.total_global}` : "-",
+        rk_batalion_disp:
+          r.rk_batalion != null && r.total_batalion ? `${r.rk_batalion}/${r.total_batalion}` : "-",
+        rk_kompi_disp:
+          r.rk_kompi != null && r.total_kompi ? `${r.rk_kompi}/${r.total_kompi}` : "-",
+        rk_pleton_disp:
+          r.rk_pleton != null && r.total_pleton ? `${r.rk_pleton}/${r.total_pleton}` : "-",
+
+        lari_12_menit_ts: r.lari_12_menit_ts != null ? Number(r.lari_12_menit_ts) : null,
+        lari_12_menit_rs: r.lari_12_menit_rs != null ? Number(r.lari_12_menit_rs) : null,
+        sit_up_ts: r.sit_up_ts != null ? Number(r.sit_up_ts) : null,
+        sit_up_rs: r.sit_up_rs != null ? Number(r.sit_up_rs) : null,
+        shuttle_run_ts: r.shuttle_run_ts != null ? Number(r.shuttle_run_ts) : null,
+        shuttle_run_rs: r.shuttle_run_rs != null ? Number(r.shuttle_run_rs) : null,
+        push_up_ts: r.push_up_ts != null ? Number(r.push_up_ts) : null,
+        push_up_rs: r.push_up_rs != null ? Number(r.push_up_rs) : null,
+        pull_up_ts: r.pull_up_ts != null ? Number(r.pull_up_ts) : null,
+        pull_up_rs: r.pull_up_rs != null ? Number(r.pull_up_rs) : null,
+
+        nilai_akhir: r.nilai_akhir != null ? Number(r.nilai_akhir) : null,
+        keterangan: r.keterangan ?? "",
+      });
+    }
+
+    // Nama file
+    const ts = new Date();
+    const y = ts.getFullYear();
+    const m2 = String(ts.getMonth() + 1).padStart(2, "0");
+    const d2 = String(ts.getDate()).padStart(2, "0");
+    const hh = String(ts.getHours()).padStart(2, "0");
+    const mm2 = String(ts.getMinutes()).padStart(2, "0");
+    const ss = String(ts.getSeconds()).padStart(2, "0");
+    const labelAngkatan = angkatan ? `-angkatan-${angkatan}` : "";
+    const labelTahap = hasTahap && tahapFinal != null ? `-tahap-${tahapFinal}` : "";
+    const fname = `rekap-jasmani${labelAngkatan}${labelTahap}-${y}${m2}${d2}-${hh}${mm2}${ss}.xlsx`;
+
+    const arrBuf = await wb.xlsx.writeBuffer();
+    const nodeBuf = Buffer.from(arrBuf);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Length", String(nodeBuf.length));
+    res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+    return res.status(200).send(nodeBuf);
+  } catch (e) {
+    console.error("[export.jasmani_rekap.xlsx] error:", e);
+    return res.status(500).send("Gagal membuat Excel rekap jasmani");
+  }
+}
+
+
+
+/* =========================================================================
+   =                               EXPORTS                                 =
+   ========================================================================= */
+
+module.exports = {
+  exportAllByNik,
+  exportSiswaXlsx,
+  exportMentalRekapExcel,
+  exportMapelXlsx,
+  exportJasmaniRekapExcel
 };
