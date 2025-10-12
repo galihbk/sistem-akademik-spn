@@ -4,8 +4,7 @@ import { getSummary, getRecentActivity } from "../api/stats";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-/* -------------------- Server Status -------------------- */
-
+/* -------------------- Utilities -------------------- */
 function msSince(ts) {
   if (!ts) return "—";
   const diff = Date.now() - ts;
@@ -29,6 +28,7 @@ async function fetchWithTimeout(url, { timeout = 5000, ...opts } = {}) {
   }
 }
 
+/* -------------------- Server Status -------------------- */
 async function checkServerOnce() {
   const t0 = performance.now();
   try {
@@ -48,25 +48,17 @@ async function checkServerOnce() {
     }
 
     const latency = Math.max(0, Math.round(t1 - t0));
-    if (okBasic && okDB) {
-      return { state: "online", latency, lastError: "" };
-    }
-    if (okBasic && !okDB) {
-      return { state: "degraded", latency, lastError: dbErr || "DB not OK" };
-    }
+    if (okBasic && okDB) return { state: "online", latency, lastError: "" };
+    if (okBasic && !okDB) return { state: "degraded", latency, lastError: dbErr || "DB not OK" };
     return { state: "offline", latency: null, lastError: "Health not OK" };
   } catch (e) {
-    return {
-      state: "offline",
-      latency: null,
-      lastError: e?.message || "error",
-    };
+    return { state: "offline", latency: null, lastError: e?.message || "error" };
   }
 }
 
 function ServerStatus() {
   const [status, setStatus] = useState({
-    state: "checking", // checking | online | degraded | offline
+    state: "checking",
     latency: null,
     lastChecked: null,
     lastError: "",
@@ -76,81 +68,35 @@ function ServerStatus() {
   const color = useMemo(() => {
     switch (status.state) {
       case "online":
-        return {
-          border: "#14532d",
-          bg: "#072714",
-          fg: "#86efac",
-          dot: "#22c55e",
-        };
+        return { border: "#14532d", bg: "#072714", fg: "#86efac", dot: "#22c55e" };
       case "degraded":
-        return {
-          border: "#7c2d12",
-          bg: "#2a1307",
-          fg: "#fdba74",
-          dot: "#f59e0b",
-        };
+        return { border: "#7c2d12", bg: "#2a1307", fg: "#fdba74", dot: "#f59e0b" };
       case "offline":
-        return {
-          border: "#7f1d1d",
-          bg: "#1b0c0c",
-          fg: "#fca5a5",
-          dot: "#ef4444",
-        };
+        return { border: "#7f1d1d", bg: "#1b0c0c", fg: "#fca5a5", dot: "#ef4444" };
       default:
-        return {
-          border: "#334155",
-          bg: "#0f172a",
-          fg: "#e2e8f0",
-          dot: "#94a3b8",
-        };
+        return { border: "#334155", bg: "#0f172a", fg: "#e2e8f0", dot: "#94a3b8" };
     }
   }, [status.state]);
 
   async function runCheck() {
     const r = await checkServerOnce();
-    setStatus((s) => ({
-      ...s,
-      state: r.state,
-      latency: r.latency,
-      lastChecked: Date.now(),
-      lastError: r.lastError,
-    }));
+    setStatus((s) => ({ ...s, ...r, lastChecked: Date.now() }));
   }
 
   useEffect(() => {
     runCheck();
-    timerRef.current = setInterval(runCheck, 10_000); // 10 detik
+    timerRef.current = setInterval(runCheck, 10_000);
     return () => clearInterval(timerRef.current);
   }, []);
 
   return (
-    <div
-      className="card"
-      style={{
-        border: `1px solid ${color.border}`,
-        background: color.bg,
-        color: color.fg,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          alignItems: "center",
-        }}
-      >
+    <div className="card" style={{ border: `1px solid ${color.border}`, background: color.bg, color: color.fg }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span
-            style={{
-              display: "inline-block",
-              width: 10,
-              height: 10,
-              borderRadius: 999,
-              background: color.dot,
-              boxShadow: `0 0 0 3px ${color.dot}22`,
-            }}
-          />
+          <span style={{
+            display: "inline-block", width: 10, height: 10, borderRadius: 999, background: color.dot,
+            boxShadow: `0 0 0 3px ${color.dot}22`,
+          }} />
           <div>
             <div style={{ fontWeight: 700 }}>Status Server</div>
             <div className="muted" style={{ fontSize: 12 }}>
@@ -159,46 +105,49 @@ function ServerStatus() {
               {status.state === "degraded" && "Online (DB bermasalah)"}
               {status.state === "offline" && "Offline / tidak terjangkau"}
               {" · "}
-              {status.latency != null
-                ? `Latency ~${status.latency} ms`
-                : "Latency —"}
+              {status.latency != null ? `Latency ~${status.latency} ms` : "Latency —"}
               {" · "}
               Terakhir cek: {msSince(status.lastChecked)}
             </div>
             {status.lastError && status.state !== "online" && (
-              <div style={{ fontSize: 12, marginTop: 6, opacity: 0.9 }}>
-                Detail: {status.lastError}
-              </div>
+              <div style={{ fontSize: 12, marginTop: 6, opacity: 0.9 }}>Detail: {status.lastError}</div>
             )}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <code
-            className="badge"
-            style={{ background: "#111827", color: "#cbd5e1" }}
-          >
-            {API}
-          </code>
-          <button className="btn" onClick={runCheck} title="Cek ulang">
-            Cek Ulang
-          </button>
+          <code className="badge" style={{ background: "#111827", color: "#cbd5e1" }}>{API}</code>
+          <button className="btn" onClick={runCheck} title="Cek ulang">Cek Ulang</button>
         </div>
       </div>
     </div>
   );
 }
 
-/* -------------------- Dashboard -------------------- */
+/* -------------------- Mini bar (tren sederhana tanpa lib) -------------------- */
+function MiniBars({ data, height = 40, maxValue }) {
+  if (!Array.isArray(data) || data.length === 0) return <div className="muted">—</div>;
+  const max = maxValue ?? Math.max(1, ...data.map(d => d.count || 0));
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "flex-end", height }}>
+      {data.map((d) => {
+        const h = Math.round(((d.count || 0) / max) * height);
+        return (
+          <div key={d.day} title={`${d.day}: ${d.count}`} style={{
+            width: 16, height: Math.max(4, h), background: "#60a5fa", borderRadius: 4,
+          }} />
+        );
+      })}
+    </div>
+  );
+}
 
+/* -------------------- Dashboard -------------------- */
 export default function Dashboard() {
   const [sum, setSum] = useState(null);
   const [act, setAct] = useState({ items: [] });
   const [err, setErr] = useState("");
 
-  // filter angkatan
-  const [angkatan, setAngkatan] = useState(
-    () => localStorage.getItem("ui.angkatan") || ""
-  );
+  const [angkatan, setAngkatan] = useState(() => localStorage.getItem("ui.angkatan") || "");
   const [opts, setOpts] = useState([]);
 
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -215,9 +164,8 @@ export default function Dashboard() {
     try {
       setErr("");
       const token = await window.authAPI.getToken();
-      // panggil API stats dengan query angkatan bila ada (opsional: backend dukung ?angkatan=...)
       const [s, a] = await Promise.all([
-        getSummary(token, angkatan), // kamu bisa ubah implementasi getSummary agar forward param
+        getSummary(token, angkatan),
         getRecentActivity(token, angkatan),
       ]);
       setSum(s);
@@ -260,50 +208,34 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [autoRefresh, intervalMs, angkatan]);
 
+  const pdf30Bk = sum?.pdf_last30?.find(x => x.tipe === 'bk')?.total ?? 0;
+  const pdf30Pel = sum?.pdf_last30?.find(x => x.tipe === 'pelanggaran')?.total ?? 0;
+
   return (
     <div className="grid">
       {/* Status server */}
       <ServerStatus />
 
       {err && (
-        <div
-          className="card"
-          style={{ borderColor: "#7f1d1d", color: "#fecaca" }}
-        >
+        <div className="card" style={{ borderColor: "#7f1d1d", color: "#fecaca" }}>
           ⚠ {err}
         </div>
       )}
 
       {/* Filter bar */}
-      <div
-        className="card"
-        style={{
-          display: "flex",
-          gap: 12,
-          alignItems: "center",
-          flexWrap: "wrap",
-        }}
-      >
+      <div className="card" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ fontWeight: 700 }}>Filter</div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <label className="muted">Angkatan</label>
           <select
             value={angkatan}
             onChange={(e) => setAngkatan(e.target.value)}
-            style={{
-              background: "#0f1424",
-              border: "1px solid #1f2937",
-              color: "#e5e7eb",
-              borderRadius: 8,
-              padding: "6px 10px",
-              minWidth: 160,
-            }}
+            style={{ background: "#0f1424", border: "1px solid #1f2937", color: "#e5e7eb",
+                     borderRadius: 8, padding: "6px 10px", minWidth: 160 }}
           >
             <option value="">Semua</option>
             {opts.map((x) => (
-              <option key={x} value={x}>
-                {x}
-              </option>
+              <option key={x} value={x}>{x}</option>
             ))}
           </select>
         </div>
@@ -311,41 +243,20 @@ export default function Dashboard() {
         <div style={{ flex: 1 }} />
 
         <div className="muted" style={{ fontSize: 12 }}>
-          Last updated:{" "}
-          {lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : "—"}
+          Last updated: {lastUpdated ? new Date(lastUpdated).toLocaleTimeString("id-ID") : "—"}
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn" onClick={load}>
-            Refresh
-          </button>
-          <label
-            className="muted"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              cursor: "pointer",
-            }}
-            title="Auto refresh"
-          >
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-            />
+          <button className="btn" onClick={load}>Refresh</button>
+          <label className="muted" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }} title="Auto refresh">
+            <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
             Auto refresh
           </label>
           <select
             value={intervalMs}
             onChange={(e) => setIntervalMs(parseInt(e.target.value, 10))}
-            style={{
-              background: "#0f1424",
-              border: "1px solid #1f2937",
-              color: "#e5e7eb",
-              borderRadius: 8,
-              padding: "6px 10px",
-            }}
+            style={{ background: "#0f1424", border: "1px solid #1f2937", color: "#e5e7eb",
+                     borderRadius: 8, padding: "6px 10px" }}
             title="Interval"
           >
             <option value={10000}>10s</option>
@@ -356,84 +267,116 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ringkasan KPI */}
+      {/* KPI cards */}
       <div className="grid grid-4">
         <a className="card" href="#/siswa" style={{ textDecoration: "none" }}>
           <div style={{ fontSize: 12, color: "#94a3b8" }}>
-            Siswa{angkatan ? ` (Angkatan ${angkatan})` : ""}
+            Total Siswa{angkatan ? ` (Angkatan ${angkatan})` : ""}
           </div>
           <div style={{ fontSize: 26, fontWeight: 800, marginTop: 6 }}>
             {sum?.siswa_total ?? "—"}
           </div>
         </a>
-        <a
-          className="card"
-          href="#/siswa#bk"
-          style={{ textDecoration: "none" }}
-        >
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>PDF BK</div>
+        <div className="card">
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>Siswa tanpa Foto</div>
+          <div style={{ fontSize: 26, fontWeight: 800, marginTop: 6 }}>
+            {sum?.siswa_no_foto ?? "—"}
+          </div>
+        </div>
+        <a className="card" href="#/siswa#bk" style={{ textDecoration: "none" }}>
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>PDF BK (total)</div>
           <div style={{ fontSize: 26, fontWeight: 800, marginTop: 6 }}>
             {sum?.bk_pdf_total ?? "—"}
           </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            30 hari: {pdf30Bk}
+          </div>
         </a>
-        <a
-          className="card"
-          href="#/siswa#pelanggaran"
-          style={{ textDecoration: "none" }}
-        >
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>PDF Pelanggaran</div>
+        <a className="card" href="#/siswa#pelanggaran" style={{ textDecoration: "none" }}>
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>PDF Pelanggaran (total)</div>
           <div style={{ fontSize: 26, fontWeight: 800, marginTop: 6 }}>
             {sum?.pelanggaran_pdf_total ?? "—"}
           </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            30 hari: {pdf30Pel}
+          </div>
         </a>
+      </div>
+
+      {/* Import terakhir + Tren 7 hari */}
+      <div className="grid grid-2">
         <div className="card">
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>Import Terakhir</div>
-          <div style={{ fontSize: 16, fontWeight: 700, marginTop: 6 }}>
-            {sum?.last_import_at
-              ? new Date(sum.last_import_at).toLocaleString("id-ID")
-              : "—"}
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Import Terakhir</div>
+          {sum?.last_import ? (
+            <div style={{ lineHeight: 1.7 }}>
+              <div><b>Tanggal:</b> {new Date(sum.last_import.created_at).toLocaleString("id-ID")}</div>
+              <div><b>Total baris:</b> {sum.last_import.rows}</div>
+              <div><span className="badge">OK: {sum.last_import.ok}</span>{" "}
+                   <span className="badge">Skip: {sum.last_import.skip}</span>{" "}
+                   <span className="badge">Fail: {sum.last_import.fail}</span></div>
+            </div>
+          ) : (
+            <div className="muted">Belum ada data import.</div>
+          )}
+        </div>
+        <div className="card">
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Siswa Baru (7 hari)</div>
+          <MiniBars data={sum?.trend_7d || []} />
+          <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            {sum?.trend_7d?.map(d => d.count).reduce((a,b)=>a+b,0) ?? 0} siswa ditambahkan (7 hari terakhir)
           </div>
         </div>
       </div>
 
-      {/* aktivitas terbaru */}
+      {/* Distribusi angkatan + Aktivitas terbaru */}
       <div className="grid grid-2">
         <div className="card">
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>
-            Aktivitas Terbaru
-          </div>
-          <ul
-            style={{
-              margin: 0,
-              paddingLeft: 18,
-              lineHeight: 1.8,
-              color: "#cbd5e1",
-            }}
-          >
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Distribusi Angkatan</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr className="muted">
+                <th style={{ textAlign: "left", padding: "6px 4px" }}>Angkatan</th>
+                <th style={{ textAlign: "right", padding: "6px 4px" }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(sum?.angkatan_dist || []).map((x) => (
+                <tr key={x.angkatan}>
+                  <td style={{ padding: "6px 4px" }}>{x.angkatan}</td>
+                  <td style={{ padding: "6px 4px", textAlign: "right" }}>{x.total}</td>
+                </tr>
+              ))}
+              {!sum?.angkatan_dist?.length && (
+                <tr><td colSpan={2} className="muted" style={{ padding: 8 }}>Tidak ada data angkatan.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="card">
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Aktivitas Terbaru</div>
+          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8, color: "#cbd5e1" }}>
             {(act.items || []).map((item) => (
               <li key={item.id}>
-                <b>{item.aksi}</b> oleh{" "}
-                <span className="badge">{item.admin || "admin"}</span>{" "}
+                <b>{item.aksi}</b> oleh <span className="badge">{item.admin || "admin"}</span>{" "}
                 <span style={{ color: "#94a3b8" }}>
                   {new Date(item.created_at).toLocaleString("id-ID")}
                 </span>
               </li>
             ))}
-            {(!act.items || act.items.length === 0) && (
-              <li>Tidak ada aktivitas.</li>
-            )}
+            {(!act.items || act.items.length === 0) && <li>Tidak ada aktivitas.</li>}
           </ul>
         </div>
-        <div className="card">
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Quick Actions</div>
-          <div className="grid">
-            {/* <a className="btn" href="#/import">
-              Buka Halaman Import
-            </a> */}
-            <a className="btn" href="#/import/siswa">
-              Cari Siswa
-            </a>
-          </div>
+      </div>
+
+      {/* Quick Actions */}
+      <div className="card">
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Tindakan Cepat</div>
+        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 8 }}>
+          <a className="btn" href="#/import/siswa">Cari Siswa</a>
+          <a className="btn" href="#/settings">Cadangan & Pemulihan</a>
+          <a className="btn" href="#/siswa#bk">Kelola PDF BK</a>
+          <a className="btn" href="#/siswa#pelanggaran">Kelola PDF Pelanggaran</a>
         </div>
       </div>
     </div>

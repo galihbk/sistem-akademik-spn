@@ -22,7 +22,16 @@ const jasmaniRoutes = require("./routes/jasmani.routes");
 const jasmaniPoldaRoutes = require("./routes/jasmani_polda.routes");
 
 const app = express();
+const PROJECT_ROOT = process.env.PROJECT_ROOT
+  ? path.resolve(process.env.PROJECT_ROOT)
+  : path.resolve(process.cwd());
 
+const UPLOAD_DIR = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.join(PROJECT_ROOT, "uploads");
+
+// buka static /uploads menunjuk ke folder yang sama dengan controller
+app.use("/uploads", express.static(UPLOAD_DIR));
 /**
  * HELMET GLOBAL:
  * - CORP: cross-origin → izinkan <img> dari origin lain (5173 ↔ 4000)
@@ -80,6 +89,7 @@ app.use("/pelanggaran", makeDocsRoutes("pelanggaran"));
 app.use("/mapel", mapelRoutes);
 app.use("/jasmani", jasmaniRoutes);
 app.use("/jasmani-polda", jasmaniPoldaRoutes);
+app.use('/api', require('./routes/backup.routes'));
 
 // Health checks
 app.get("/health", (_req, res) => res.json({ ok: true }));

@@ -1,257 +1,335 @@
 // electron/main.js
-const { app, BrowserWindow, ipcMain, dialog, session } = require("electron");
-const path = require("path");
-const url = require("url");
-const Store = require("electron-store");
-const fs = require("fs");
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const urlMod = require('url');
+const http = require('http');
+const https = require('https');
 
-// ===== Config =====
-const store = new Store({ name: "prefs" });
-const isDev = process.env.NODE_ENV === "development";
-const RENDERER_URL = process.env.RENDERER_URL || "http://localhost:5173";
+let mainWindow = null;
 
-let win;
+// ===== Simple logger ke file =====
+let LOG_FILE = null;
+function initLogger() {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    LOG_FILE = path.join(dir, 'electron-main.log');
+    log('[init] logger ready at', LOG_FILE);
+  } catch (e) {
+    console.error('[logger-init-error]', e);
+  }
+}
+function log(...args) {
+  const line = `[${new Date().toISOString()}] ${args.map(String).join(' ')}\n`;
+  try { if (LOG_FILE) fs.appendFileSync(LOG_FILE, line); } catch {}
+  console.log(...args);
+}
+function showErrorBox(title, err) {
+  const msg = (err && err.stack) ? err.stack : (err && err.message) ? err.message : String(err);
+  log('[ERRORBOX]', title, msg);
+  try { dialog.showErrorBox(title, msg); } catch {}
+}
 
+// ===== Global state =====
+let settingsCache = {
+  askWhere: false,
+  saveFolder: '',
+  exportFolder: '',
+  backupFolder: '',
+};
+let authToken = null;
+
+// ===== Create window safely =====
 function createWindow() {
-  const last = store.get("winBounds", {
-    width: 1200,
-    height: 800,
-    isMaximized: false,
-  });
-
-  win = new BrowserWindow({
-    width: last.width,
-    height: last.height,
-    backgroundColor: "#0b1220",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  if (last.isMaximized) win.maximize();
-  loadRenderer().catch((err) =>
-    console.error("[electron] loadRenderer failed:", err)
-  );
-
-  // simpan ukuran saat close
-  win.on("close", () => {
-    if (!win) return;
-    const isMax = win.isMaximized();
-    const bounds = win.getBounds();
-    store.set("winBounds", {
-      width: bounds.width,
-      height: bounds.height,
-      isMaximized: isMax,
-    });
-  });
-
-  win.on("closed", () => {
-    win = null;
-  });
-
-  // ====== Download / Export handler (terpusat) ======
-  const sess =
-    session.fromPartition("persist:sa-default") || session.defaultSession;
-
-  // Terapkan listener di session default
-  sess.on("will-download", (event, item /* DownloadItem */, webContents) => {
-    // Preferensi
-    const askWhere = !!store.get("save.askWhere", false);
-    const saveFolder = store.get("save.folder", "");
-    const exportFolder = store.get("export.folder", "");
-    const urlStr = item.getURL();
-
-    // Deteksi apakah ini export (kasar: path /export/all)
-    const isExport = /\/export\/all/i.test(urlStr);
-
-    // Nama file default dari server
-    const filename = item.getFilename() || `download_${Date.now()}`;
-
-    // Tentukan save path
-    let chosenPath = null;
-
-    if (askWhere) {
-      // Buka dialog Save As
-      event.preventDefault(); // kita override save path
-      dialog
-        .showSaveDialog(win, {
-          title: isExport ? "Simpan File Export" : "Simpan File",
-          defaultPath: path.join(
-            isExport && exportFolder
-              ? exportFolder
-              : saveFolder || app.getPath("downloads"),
-            filename
-          ),
-        })
-        .then(({ canceled, filePath }) => {
-          if (canceled || !filePath) {
-            item.cancel();
-            return;
-          }
-          item.setSavePath(filePath);
-          afterSetSavePath(item, filePath);
-        })
-        .catch(() => item.cancel());
-    } else {
-      // Tanpa dialog -> simpan ke folder setting
-      const baseDir =
-        isExport && exportFolder
-          ? exportFolder
-          : saveFolder || app.getPath("downloads");
-      try {
-        fs.mkdirSync(baseDir, { recursive: true });
-      } catch {}
-      chosenPath = path.join(baseDir, filename);
-      item.setSavePath(chosenPath);
-      afterSetSavePath(item, chosenPath);
+  try {
+    const preloadPath = path.join(__dirname, 'preload.js');
+    if (!fs.existsSync(preloadPath)) {
+      showErrorBox('Preload tidak ditemukan', new Error(preloadPath));
     }
 
-    function afterSetSavePath(downloadItem, finalPath) {
-      // Kirim status ke renderer
-      if (win && !win.isDestroyed()) {
-        win.webContents.send("download:status", {
-          state: "started",
-          filename,
-          path: finalPath,
-          url: urlStr,
-          isExport,
-        });
+    mainWindow = new BrowserWindow({
+      width: 1200,
+      height: 800,
+      webPreferences: {
+        preload: preloadPath,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+      },
+      show: false,
+    });
+
+    mainWindow.once('ready-to-show', () => {
+      try { mainWindow.show(); } catch (e) { log('[ready-to-show error]', e); }
+      if (process.env.OPEN_DEVTOOLS === '1' || process.env.NODE_ENV !== 'production') {
+        try { mainWindow.webContents.openDevTools({ mode: 'detach' }); } catch {}
+      }
+    });
+
+    const RENDERER_URL = process.env.RENDERER_URL;
+    if (RENDERER_URL) {
+      log('[loadURL]', RENDERER_URL);
+      mainWindow.loadURL(RENDERER_URL).catch((e) => {
+        showErrorBox('Gagal load RENDERER_URL', e);
+      });
+    } else {
+      const indexPath = path.join(process.cwd(), 'renderer', 'dist', 'index.html');
+      log('[loadFile]', indexPath);
+      mainWindow.loadFile(indexPath).catch((e) => {
+        showErrorBox('Gagal load renderer index.html', e);
+      });
+    }
+
+    mainWindow.on('closed', () => { mainWindow = null; });
+  } catch (e) {
+    showErrorBox('createWindow error', e);
+  }
+}
+
+// ===== App lifecycle =====
+if (!app.requestSingleInstanceLock()) {
+  app.quit(); // pastikan single instance
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+
+  app.whenReady().then(() => {
+    initLogger();
+    log('[app] ready');
+    createWindow();
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+}
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+// ===== Global error handlers =====
+process.on('uncaughtException', (err) => {
+  showErrorBox('Uncaught Exception (main)', err);
+});
+process.on('unhandledRejection', (reason) => {
+  showErrorBox('Unhandled Rejection (main)', reason instanceof Error ? reason : new Error(String(reason)));
+});
+app.on('render-process-gone', (_e, wc, details) => {
+  log('[render-process-gone]', details && JSON.stringify(details));
+});
+
+// ===== Helpers =====
+function notify(payload) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('download:status', payload);
+    }
+  } catch (e) {
+    log('[notify error]', e.message);
+  }
+}
+function getClientAndOpts(urlStr, token) {
+  const u = urlMod.parse(urlStr);
+  const isHttps = u.protocol === 'https:';
+  const client = isHttps ? https : http;
+  const opts = {
+    protocol: u.protocol,
+    hostname: u.hostname,
+    port: u.port,
+    path: (u.pathname || '') + (u.search || ''),
+    method: 'GET',
+    headers: {},
+    rejectUnauthorized: false, // set true jika TLS valid
+  };
+  if (token) opts.headers.Authorization = `Bearer ${token}`;
+  return { client, opts };
+}
+function encodePathSegments(rel) {
+  return rel.split('/').map(encodeURIComponent).join('/');
+}
+function ensureDir(p) {
+  try { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); } catch (e) { log('[ensureDir]', p, e.message); }
+}
+function httpGetJson(urlStr, token) {
+  log('[httpGetJson]', urlStr);
+  return new Promise((resolve, reject) => {
+    const { client, opts } = getClientAndOpts(urlStr, token);
+    const req = client.request(opts, (res) => {
+      if (res.statusCode !== 200) {
+        const err = new Error(`HTTP ${res.statusCode} for ${opts.path}`);
+        log('[httpGetJson status!=200]', err.message);
+        res.resume();
+        return reject(err);
+      }
+      let buf = '';
+      res.setEncoding('utf8');
+      res.on('data', (d) => (buf += d));
+      res.on('end', () => {
+        try { resolve(JSON.parse(buf)); }
+        catch (e) { log('[httpGetJson parse]', e.message); reject(e); }
+      });
+    });
+    req.on('error', (e) => { log('[httpGetJson req error]', e.message); reject(e); });
+    req.end();
+  });
+}
+function downloadWithFallbackToFile(urls, outPath, token) {
+  log('[downloadWithFallbackToFile]', urls.join(' | '), '->', outPath);
+  return new Promise((resolve, reject) => {
+    const errs = [];
+    const tryOne = (idx) => {
+      if (idx >= urls.length) {
+        const err = new Error(`All sources failed: ${errs.join(' | ')}`);
+        return reject(err);
+      }
+      const { client, opts } = getClientAndOpts(urls[idx], token);
+      const out = fs.createWriteStream(outPath);
+      const req = client.request(opts, (res) => {
+        if (res.statusCode !== 200) {
+          out.destroy();
+          errs.push(`HTTP ${res.statusCode} for ${opts.path}`);
+          res.resume();
+          log('[download fail]', urls[idx], '->', `HTTP ${res.statusCode}`);
+          return tryOne(idx + 1);
+        }
+        res.pipe(out);
+        res.on('end', () => out.end(resolve));
+      });
+      req.on('error', (e) => {
+        out.destroy();
+        errs.push(e.message);
+        log('[download req error]', urls[idx], e.message);
+        tryOne(idx + 1);
+      });
+      out.on('error', (e) => {
+        errs.push(e.message);
+        log('[download out error]', outPath, e.message);
+        tryOne(idx + 1);
+      });
+      req.end();
+    };
+    tryOne(0);
+  });
+}
+
+// ===== IPC: AUTH =====
+ipcMain.handle('auth:setToken', async (_e, t) => { authToken = t || null; log('[auth:setToken]', !!authToken); return true; });
+ipcMain.handle('auth:getToken', async () => authToken);
+ipcMain.handle('auth:clearToken', async () => { authToken = null; log('[auth:clearToken]'); return true; });
+
+// ===== IPC: SETTINGS =====
+ipcMain.handle('settings:getAll', async () => settingsCache);
+ipcMain.handle('settings:set', async (_evt, s) => {
+  settingsCache = { ...settingsCache, ...s };
+  log('[settings:set]', JSON.stringify(settingsCache));
+  return true;
+});
+ipcMain.handle('settings:chooseFolder', async (_evt, { initialPath, title }) => {
+  const res = await dialog.showOpenDialog({
+    title: title || 'Pilih Folder',
+    defaultPath: initialPath || undefined,
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (res.canceled || !res.filePaths?.[0]) return null;
+  return res.filePaths[0];
+});
+
+// ===== IPC: BACKUP (mirror db.sql + uploads) =====
+ipcMain.handle('backup:run', async (_evt, { chooseDir } = {}) => {
+  try {
+    let root = settingsCache.backupFolder && fs.existsSync(settingsCache.backupFolder)
+      ? settingsCache.backupFolder
+      : (settingsCache.exportFolder && fs.existsSync(settingsCache.exportFolder)
+          ? settingsCache.exportFolder
+          : app.getPath('downloads'));
+
+    if (chooseDir) {
+      const picked = await dialog.showOpenDialog({
+        title: 'Pilih Folder Root Backup',
+        defaultPath: root,
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      if (picked.canceled || !picked.filePaths?.[0]) {
+        return { ok: false, message: 'Dibatalkan' };
+      }
+      root = picked.filePaths[0];
+    }
+    ensureDir(root);
+
+    const BASE = process.env.BACKEND_URL_BASE || 'http://localhost:4000';
+    const DB_URL   = `${BASE}/api/admin/backup/db`;
+    const LIST_URL = `${BASE}/api/admin/backup/uploads-list`;
+    const FILE_URL = `${BASE}/api/admin/backup/upload-file?p=`;
+
+    // Dump DB
+    notify({ type: 'backup', phase: 'db:start' });
+    const dbPath = path.join(root, 'db.sql');
+    await downloadWithFallbackToFile([DB_URL], dbPath, authToken);
+    notify({ type: 'backup', phase: 'db:done', path: dbPath });
+
+    // List uploads
+    notify({ type: 'backup', phase: 'files:scan' });
+    const listJson = await httpGetJson(LIST_URL, authToken);
+    const items = Array.isArray(listJson.items) ? listJson.items : [];
+    const total = items.length;
+    log('[backup:list] total', total);
+
+    if (total === 0) {
+      notify({ type: 'backup', phase: 'done', root, message: 'Uploads kosong / UPLOAD_DIR tidak ditemukan' });
+      return { ok: true, root, note: 'no uploads' };
+    }
+
+    // Mirror uploads
+    let done = 0;
+    const failed = [];
+    for (const it of items) {
+      done++;
+      const rel = it.path;
+      const dst = path.join(root, 'uploads', rel);
+      ensureDir(path.dirname(dst));
+
+      let skip = false;
+      try {
+        const st = fs.statSync(dst);
+        if (st.isFile() && Number(st.size) === Number(it.size)) skip = true;
+      } catch {}
+
+      if (!skip) {
+        const encRelForQuery = encodeURIComponent(rel).replace(/%2F/g, '/');
+        const encRelForStatic = encodePathSegments(rel);
+
+        const primary = `${FILE_URL}${encRelForQuery}`.replace('/api/admin/backup/upload-file?p=', `${BASE}/api/admin/backup/upload-file?p=`);
+        const fallback = `${BASE}/uploads/${encRelForStatic}`;
+
+        try {
+          await downloadWithFallbackToFile([primary, fallback], dst, authToken);
+        } catch (e) {
+          failed.push({ rel, error: e.message });
+          log('[backup:file failed]', rel, e.message);
+        }
       }
 
-      downloadItem.on("updated", (_e, state) => {
-        if (state === "interrupted") {
-          if (win && !win.isDestroyed()) {
-            win.webContents.send("download:status", {
-              state: "failed",
-              filename,
-              path: finalPath,
-              url: urlStr,
-              isExport,
-              error: "Terputus",
-            });
-          }
-        } else if (state === "progressing") {
-          const recv = downloadItem.getReceivedBytes();
-          const total = downloadItem.getTotalBytes();
-          const percent = total > 0 ? Math.round((recv / total) * 100) : null;
-          if (win && !win.isDestroyed()) {
-            win.webContents.send("download:status", {
-              state: "progress",
-              filename,
-              path: finalPath,
-              url: urlStr,
-              isExport,
-              percent,
-            });
-          }
-        }
-      });
-
-      downloadItem.once("done", (_e, state) => {
-        if (!win || win.isDestroyed()) return;
-        if (state === "completed") {
-          win.webContents.send("download:status", {
-            state: "completed",
-            filename,
-            path: finalPath,
-            url: urlStr,
-            isExport,
-          });
-        } else {
-          win.webContents.send("download:status", {
-            state: "failed",
-            filename,
-            path: finalPath,
-            url: urlStr,
-            isExport,
-            error: state,
-          });
-        }
-      });
+      if (done % 50 === 0 || done === total) {
+        notify({ type: 'backup', phase: 'files:progress', done, total, message: `Menyalin uploads… ${done}/${total}` });
+      }
     }
-  });
-}
 
-async function loadRenderer() {
-  if (!win) return;
-
-  if (isDev && RENDERER_URL) {
-    try {
-      await win.loadURL(RENDERER_URL);
-      win.webContents.openDevTools({ mode: "detach" });
-      return;
-    } catch (e) {
-      console.warn(
-        "[electron] DEV URL gagal, fallback ke file dist:",
-        e.message
-      );
+    if (failed.length) {
+      notify({ type: 'backup', phase: 'done', root, failedCount: failed.length, message: `Selesai dengan ${failed.length} gagal` });
+      log('[backup:failed count]', failed.length);
+    } else {
+      notify({ type: 'backup', phase: 'done', root });
     }
+
+    return { ok: true, root, failedCount: failed.length };
+  } catch (e) {
+    notify({ type: 'backup', phase: 'error', message: e.message });
+    showErrorBox('Backup gagal', e);
+    return { ok: false, message: e.message };
   }
-
-  const indexPath = path.join(__dirname, "../renderer/dist/index.html");
-  const fileUrl = url.pathToFileURL(indexPath).toString();
-  await win.loadURL(fileUrl);
-}
-
-// ===== Lifecycle =====
-app.whenReady().then(() => {
-  createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
-
-// ===== IPC: token store =====
-ipcMain.handle("auth:setToken", (_e, t) => {
-  store.set("auth.token", t || "");
-  return true;
-});
-ipcMain.handle("auth:getToken", () => store.get("auth.token", ""));
-ipcMain.handle("auth:clearToken", () => {
-  store.delete("auth.token");
-  return true;
-});
-
-// ===== IPC: settings (download/export) =====
-ipcMain.handle("settings:getAll", () => {
-  return {
-    askWhere: !!store.get("save.askWhere", false),
-    saveFolder: store.get("save.folder", ""),
-    exportFolder: store.get("export.folder", ""),
-  };
-});
-
-ipcMain.handle("settings:set", (_e, payload = {}) => {
-  if ("askWhere" in payload) store.set("save.askWhere", !!payload.askWhere);
-  if ("saveFolder" in payload)
-    store.set("save.folder", String(payload.saveFolder || ""));
-  if ("exportFolder" in payload)
-    store.set("export.folder", String(payload.exportFolder || ""));
-  return true;
-});
-
-ipcMain.handle(
-  "settings:chooseFolder",
-  async (_e, { initialPath = "", title = "Pilih Folder" } = {}) => {
-    const result = await dialog.showOpenDialog(win, {
-      title,
-      properties: ["openDirectory", "createDirectory"],
-      defaultPath: initialPath || undefined,
-    });
-    if (result.canceled || !result.filePaths?.[0]) return null;
-    return result.filePaths[0];
-  }
-);
-
-// ===== IPC: trigger download via URL =====
-ipcMain.handle("download:start", async (_e, urlStr) => {
-  if (!win) throw new Error("Window not ready");
-  await win.webContents.downloadURL(urlStr);
-  return true;
 });

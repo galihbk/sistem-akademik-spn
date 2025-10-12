@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld("authAPI", {
 });
 
 contextBridge.exposeInMainWorld("electronAPI", {
-  // download/export
+  // download/export (punyamu yg lama)
   download: (url) => ipcRenderer.invoke("download:start", url),
   onDownloadStatus: (cb) => {
     const fn = (_ev, payload) => cb && cb(payload);
@@ -20,4 +20,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getSettings: () => ipcRenderer.invoke("settings:getAll"),
   setSettings: (payload) => ipcRenderer.invoke("settings:set", payload),
   chooseFolder: (opts) => ipcRenderer.invoke("settings:chooseFolder", opts),
+
+  // backup (baru)
+  runBackup: (opts) => ipcRenderer.invoke("backup:run", opts),
 });

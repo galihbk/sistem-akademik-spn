@@ -35,15 +35,6 @@ electron-builder.yml
 .DS_Store
 Thumbs.db
 
-# Excel / Import Data
-*.xlsx
-*.xls
-*.csv
-
-# PDF / Upload files
-*.pdf
-assets/uploads/
-
 
 # IDE & editor settings
 .idea/
