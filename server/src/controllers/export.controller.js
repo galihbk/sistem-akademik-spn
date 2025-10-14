@@ -583,10 +583,7 @@ async function exportSiswaXlsx(req, res) {
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     );
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${fname}"`
-    );
+    res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
 
     await wb.xlsx.write(res);
     res.end();
@@ -604,7 +601,8 @@ async function exportSiswaXlsx(req, res) {
 function sanitizeSort({ sort_by, sort_dir }) {
   const sortCols = new Set(["nama", "nosis"]);
   const col = sortCols.has((sort_by || "").toLowerCase()) ? sort_by : "nama";
-  const dir = (String(sort_dir || "asc").toLowerCase() === "desc") ? "DESC" : "ASC";
+  const dir =
+    String(sort_dir || "asc").toLowerCase() === "desc" ? "DESC" : "ASC";
   return { col, dir };
 }
 
@@ -627,7 +625,9 @@ async function exportMentalRekapExcel(req, res) {
       params.push(angkatan);
     }
     if (q) {
-      where.push(`(LOWER(s.nama) LIKE LOWER($${p}) OR LOWER(s.nosis) LIKE LOWER($${p}))`);
+      where.push(
+        `(LOWER(s.nama) LIKE LOWER($${p}) OR LOWER(s.nosis) LIKE LOWER($${p}))`
+      );
       params.push(`%${q}%`);
       p++;
     }
@@ -648,10 +648,12 @@ async function exportMentalRekapExcel(req, res) {
       .sort((a, b) => a - b);
 
     // ---- 2) query utama (PERBAIKAN: pakai alias 'b' di pivotExprs)
-    const pivotExprs = weeks.map(
-      (w) =>
-        `MAX(CASE WHEN b.minggu_ke = ${w} THEN b.nilai_num END) AS "Minggu ${w}"`
-    ).join(",\n          ");
+    const pivotExprs = weeks
+      .map(
+        (w) =>
+          `MAX(CASE WHEN b.minggu_ke = ${w} THEN b.nilai_num END) AS "Minggu ${w}"`
+      )
+      .join(",\n          ");
 
     const sql = `
       WITH base AS (
@@ -715,7 +717,9 @@ async function exportMentalRekapExcel(req, res) {
         ${weeks.map((w) => `"Minggu ${w}"`).join(", ")}
       FROM ranks r
       LEFT JOIN pivot p ON p.siswa_id = r.siswa_id
-      ORDER BY ${sortCol === "nosis" ? "r.nosis" : "r.nama"} ${sortDir}, r.nosis ASC
+      ORDER BY ${
+        sortCol === "nosis" ? "r.nosis" : "r.nama"
+      } ${sortDir}, r.nosis ASC
     `;
 
     const dataRes = await pool.query(sql, params);
@@ -732,8 +736,18 @@ async function exportMentalRekapExcel(req, res) {
       { header: "Batalion", key: "batalion", width: 12 },
       { header: "Kompi", key: "kompi", width: 10 },
       { header: "Pleton", key: "pleton", width: 10 },
-      { header: "Jumlah", key: "sum_nilai", width: 14, style: { numFmt: "0.000" } },
-      { header: "Rata-rata", key: "avg_nilai", width: 14, style: { numFmt: "0.000" } },
+      {
+        header: "Jumlah",
+        key: "sum_nilai",
+        width: 14,
+        style: { numFmt: "0.000" },
+      },
+      {
+        header: "Rata-rata",
+        key: "avg_nilai",
+        width: 14,
+        style: { numFmt: "0.000" },
+      },
       { header: "R. Global", key: "rk_global_disp", width: 12 },
       { header: "R. Batalion", key: "rk_batalion_disp", width: 12 },
       { header: "R. Kompi", key: "rk_kompi_disp", width: 12 },
@@ -759,13 +773,21 @@ async function exportMentalRekapExcel(req, res) {
         sum_nilai: r.sum_nilai != null ? Number(r.sum_nilai) : null,
         avg_nilai: r.avg_nilai != null ? Number(r.avg_nilai) : null,
         rk_global_disp:
-          r.rk_global != null && r.total_global ? `${r.rk_global}/${r.total_global}` : "-",
+          r.rk_global != null && r.total_global
+            ? `${r.rk_global}/${r.total_global}`
+            : "-",
         rk_batalion_disp:
-          r.rk_batalion != null && r.total_batalion ? `${r.rk_batalion}/${r.total_batalion}` : "-",
+          r.rk_batalion != null && r.total_batalion
+            ? `${r.rk_batalion}/${r.total_batalion}`
+            : "-",
         rk_kompi_disp:
-          r.rk_kompi != null && r.total_kompi ? `${r.rk_kompi}/${r.total_kompi}` : "-",
+          r.rk_kompi != null && r.total_kompi
+            ? `${r.rk_kompi}/${r.total_kompi}`
+            : "-",
         rk_pleton_disp:
-          r.rk_pleton != null && r.total_pleton ? `${r.rk_pleton}/${r.total_pleton}` : "-",
+          r.rk_pleton != null && r.total_pleton
+            ? `${r.rk_pleton}/${r.total_pleton}`
+            : "-",
       };
       for (const w of weeks) {
         const colName = `Minggu ${w}`;
@@ -810,16 +832,17 @@ function sanitizeMapelSort({ sort_by, sort_dir }) {
     ["updated_at", "m.updated_at"],
   ]);
   const col = map.get(String(sort_by || "nama")) || "LOWER(s.nama)";
-  const dir = String(sort_dir || "asc").toLowerCase() === "desc" ? "DESC" : "ASC";
+  const dir =
+    String(sort_dir || "asc").toLowerCase() === "desc" ? "DESC" : "ASC";
   return { col, dir };
 }
 
 async function exportMapelXlsx(req, res) {
   try {
-    const q = String(req.query.q || "").trim();                  // cari nama/nosis/mapel
-    const angkatan = String(req.query.angkatan || "").trim();    // filter kelompok_angkatan
-    const semester = String(req.query.semester || "").trim();    // opsional
-    const mapelName = String(req.query.mapel || "").trim();      // opsional
+    const q = String(req.query.q || "").trim(); // cari nama/nosis/mapel
+    const angkatan = String(req.query.angkatan || "").trim(); // filter kelompok_angkatan
+    const semester = String(req.query.semester || "").trim(); // opsional
+    const mapelName = String(req.query.mapel || "").trim(); // opsional
     // NOTE: selalu ekspor semua (abaikan page/limit). Kita tetap baca 'all' bila ada:
     const all = String(req.query.all || "1") === "1";
 
@@ -893,8 +916,18 @@ async function exportMapelXlsx(req, res) {
       { header: "Pertemuan", key: "pertemuan", width: 12 },
       { header: "Nilai", key: "nilai", width: 12 },
       { header: "Catatan", key: "catatan", width: 30 },
-      { header: "Created At", key: "created_at", width: 20, style: { numFmt: "yyyy-mm-dd hh:mm" } },
-      { header: "Updated At", key: "updated_at", width: 20, style: { numFmt: "yyyy-mm-dd hh:mm" } },
+      {
+        header: "Created At",
+        key: "created_at",
+        width: 20,
+        style: { numFmt: "yyyy-mm-dd hh:mm" },
+      },
+      {
+        header: "Updated At",
+        key: "updated_at",
+        width: 20,
+        style: { numFmt: "yyyy-mm-dd hh:mm" },
+      },
     ];
     ws.getRow(1).font = { bold: true };
 
@@ -939,7 +972,7 @@ async function exportMapelXlsx(req, res) {
     console.error("[export.mapel.xlsx]", e);
     return res.status(500).send("Gagal membuat Excel Mapel.");
   }
-};
+}
 
 // ---------- helper: apakah tabel punya kolom tertentu ----------
 async function tableHasColumn(tableName, columnName) {
@@ -955,8 +988,10 @@ async function tableHasColumn(tableName, columnName) {
 
 // ---------- helper: whitelist sort ----------
 function sanitizeSimpleSort({ sort_by, sort_dir }) {
-  const col = String(sort_by || "nama").toLowerCase() === "nosis" ? "nosis" : "nama";
-  const dir = String(sort_dir || "asc").toLowerCase() === "desc" ? "DESC" : "ASC";
+  const col =
+    String(sort_by || "nama").toLowerCase() === "nosis" ? "nosis" : "nama";
+  const dir =
+    String(sort_dir || "asc").toLowerCase() === "desc" ? "DESC" : "ASC";
   return { col, dir };
 }
 
@@ -980,11 +1015,15 @@ async function exportJasmaniRekapExcel(req, res) {
       params.push(angkatan);
     }
     if (q) {
-      whereParts.push(`(LOWER(s.nama) LIKE LOWER($${p}) OR LOWER(s.nosis) LIKE LOWER($${p}))`);
+      whereParts.push(
+        `(LOWER(s.nama) LIKE LOWER($${p}) OR LOWER(s.nosis) LIKE LOWER($${p}))`
+      );
       params.push(`%${q}%`);
       p++;
     }
-    const whereSQL = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+    const whereSQL = whereParts.length
+      ? `WHERE ${whereParts.join(" AND ")}`
+      : "";
 
     // Cek apakah ada kolom `tahap`
     const hasTahap = await tableHasColumn("jasmani", "tahap");
@@ -1011,7 +1050,10 @@ async function exportJasmaniRekapExcel(req, res) {
             "Content-Type",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           );
-          res.setHeader("Content-Disposition", `attachment; filename="rekap-jasmani-empty.xlsx"`);
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="rekap-jasmani-empty.xlsx"`
+          );
           const wbEmpty = new ExcelJS.Workbook();
           wbEmpty.addWorksheet("Rekap Jasmani").addRow(["Tidak ada data"]);
           await wbEmpty.xlsx.write(res);
@@ -1129,7 +1171,10 @@ async function exportJasmaniRekapExcel(req, res) {
         ORDER BY ${sortCol === "nosis" ? "nosis" : "nama"} ${sortDir}, nosis ASC
       `;
 
-    const { rows } = await pool.query(sql, hasTahap ? [...params, tahapFinal] : params);
+    const { rows } = await pool.query(
+      sql,
+      hasTahap ? [...params, tahapFinal] : params
+    );
 
     // Build Excel
     const wb = new ExcelJS.Workbook();
@@ -1176,20 +1221,32 @@ async function exportJasmaniRekapExcel(req, res) {
         tahap: r.tahap ?? null,
 
         rk_global_disp:
-          r.rk_global != null && r.total_global ? `${r.rk_global}/${r.total_global}` : "-",
+          r.rk_global != null && r.total_global
+            ? `${r.rk_global}/${r.total_global}`
+            : "-",
         rk_batalion_disp:
-          r.rk_batalion != null && r.total_batalion ? `${r.rk_batalion}/${r.total_batalion}` : "-",
+          r.rk_batalion != null && r.total_batalion
+            ? `${r.rk_batalion}/${r.total_batalion}`
+            : "-",
         rk_kompi_disp:
-          r.rk_kompi != null && r.total_kompi ? `${r.rk_kompi}/${r.total_kompi}` : "-",
+          r.rk_kompi != null && r.total_kompi
+            ? `${r.rk_kompi}/${r.total_kompi}`
+            : "-",
         rk_pleton_disp:
-          r.rk_pleton != null && r.total_pleton ? `${r.rk_pleton}/${r.total_pleton}` : "-",
+          r.rk_pleton != null && r.total_pleton
+            ? `${r.rk_pleton}/${r.total_pleton}`
+            : "-",
 
-        lari_12_menit_ts: r.lari_12_menit_ts != null ? Number(r.lari_12_menit_ts) : null,
-        lari_12_menit_rs: r.lari_12_menit_rs != null ? Number(r.lari_12_menit_rs) : null,
+        lari_12_menit_ts:
+          r.lari_12_menit_ts != null ? Number(r.lari_12_menit_ts) : null,
+        lari_12_menit_rs:
+          r.lari_12_menit_rs != null ? Number(r.lari_12_menit_rs) : null,
         sit_up_ts: r.sit_up_ts != null ? Number(r.sit_up_ts) : null,
         sit_up_rs: r.sit_up_rs != null ? Number(r.sit_up_rs) : null,
-        shuttle_run_ts: r.shuttle_run_ts != null ? Number(r.shuttle_run_ts) : null,
-        shuttle_run_rs: r.shuttle_run_rs != null ? Number(r.shuttle_run_rs) : null,
+        shuttle_run_ts:
+          r.shuttle_run_ts != null ? Number(r.shuttle_run_ts) : null,
+        shuttle_run_rs:
+          r.shuttle_run_rs != null ? Number(r.shuttle_run_rs) : null,
         push_up_ts: r.push_up_ts != null ? Number(r.push_up_ts) : null,
         push_up_rs: r.push_up_rs != null ? Number(r.push_up_rs) : null,
         pull_up_ts: r.pull_up_ts != null ? Number(r.pull_up_ts) : null,
@@ -1209,7 +1266,8 @@ async function exportJasmaniRekapExcel(req, res) {
     const mm2 = String(ts.getMinutes()).padStart(2, "0");
     const ss = String(ts.getSeconds()).padStart(2, "0");
     const labelAngkatan = angkatan ? `-angkatan-${angkatan}` : "";
-    const labelTahap = hasTahap && tahapFinal != null ? `-tahap-${tahapFinal}` : "";
+    const labelTahap =
+      hasTahap && tahapFinal != null ? `-tahap-${tahapFinal}` : "";
     const fname = `rekap-jasmani${labelAngkatan}${labelTahap}-${y}${m2}${d2}-${hh}${mm2}${ss}.xlsx`;
 
     const arrBuf = await wb.xlsx.writeBuffer();
@@ -1227,8 +1285,6 @@ async function exportJasmaniRekapExcel(req, res) {
   }
 }
 
-
-
 /* =========================================================================
    =                               EXPORTS                                 =
    ========================================================================= */
@@ -1238,5 +1294,5 @@ module.exports = {
   exportSiswaXlsx,
   exportMentalRekapExcel,
   exportMapelXlsx,
-  exportJasmaniRekapExcel
+  exportJasmaniRekapExcel,
 };

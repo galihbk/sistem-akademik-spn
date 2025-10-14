@@ -1,5 +1,8 @@
+// src/pages/RekapJasmaniPolda.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useShell } from "../context/ShellContext";
+import { useToast } from "../components/Toaster";
+
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 const W_NOSIS = 220; // diperlebar utk select
@@ -7,8 +10,13 @@ const W_NAMA = 240;
 const W_TEXT = 130;
 const W_NUM = 100;
 
+// auto-close
+const SUCCESS_CLOSE_MS = 4000;
+const ERROR_CLOSE_MS = 6000;
+
 export default function RekapJasmaniPolda() {
   const { angkatan: angkatanFromShell } = useShell();
+  const toast = useToast();
 
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
@@ -79,7 +87,8 @@ export default function RekapJasmaniPolda() {
           : Array.isArray(data)
           ? data
           : [];
-        // Normalisasi: butuh {id, nosis, nama}
+
+        // Normalisasi: {id, nosis, nama}
         const norm = arr
           .map((it) => ({
             id: it.id,
@@ -144,41 +153,44 @@ export default function RekapJasmaniPolda() {
   }, [q, angkatanFilter, angkatanFromShell, sortBy, sortDir]);
 
   // styles
+  // ==== helpers (sticky) – GANTI SEMUA WARNA KE VAR() ====
   const stickyLeftTH = (px) => ({
     position: "sticky",
     top: 0,
     left: px,
-    background: "#0b1220",
-    zIndex: 6,
-    boxShadow: px ? "6px 0 10px rgba(0,0,0,.35)" : "inset 0 -1px 0 #1f2937",
+    background: "var(--table-header-bg)",
+    zIndex: 6, // header di atas sel
+    boxShadow: px
+      ? "var(--table-sticky-shadow-left)"
+      : "inset 0 -1px 0 var(--border)",
   });
   const stickyLeftTD = (px) => ({
     position: "sticky",
     left: px,
-    background: "#0b1220",
+    background: "var(--panel)",
     zIndex: 5,
-    boxShadow: px ? "6px 0 10px rgba(0,0,0,.35)" : "none",
+    boxShadow: px ? "var(--table-sticky-shadow-left)" : "none",
   });
   const stickyTop = {
     position: "sticky",
     top: 0,
-    background: "#0b1220",
+    background: "var(--table-header-bg)",
     zIndex: 4,
   };
   const thBase = {
     whiteSpace: "nowrap",
     fontWeight: 700,
-    borderBottom: "1px solid #1f2937",
+    borderBottom: "1px solid var(--border)",
   };
   const numCell = {
     textAlign: "right",
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
   };
+
   const fmtNum = (v) => (v == null || Number.isNaN(v) ? "-" : Number(v));
 
   // ==================== definisi kolom ====================
-
   const anthroCols = [
     { key: "tb_cm", label: "TB (cm)" },
     { key: "bb_kg", label: "BB (kg)" },
@@ -243,6 +255,7 @@ export default function RekapJasmaniPolda() {
   // ==================== handlers ====================
   async function handleSetSiswa(row, newSiswaId) {
     const prev = row.siswa_id ?? null;
+
     // optimistik update UI
     setItems((old) =>
       old.map((it) =>
@@ -252,10 +265,21 @@ export default function RekapJasmaniPolda() {
       )
     );
 
+    // toast loading
+    const tId = toast.show({
+      type: "loading",
+      title: "Menyimpan mapping…",
+      message: newSiswaId
+        ? `Mengaitkan ke siswa ID ${newSiswaId}`
+        : "Melepas kaitan siswa",
+      indeterminate: true,
+      canDismiss: true,
+      duration: 0,
+    });
+
     try {
       const token = await window.authAPI?.getToken?.();
       // ⚠️ SESUAIKAN DENGAN ROUTE SERVER KAMU
-      // contoh: PATCH /jasmani-polda/:id/set-siswa  { siswa_id }
       const r = await fetch(`${API}/jasmani-polda/${row.id}/set-siswa`, {
         method: "PATCH",
         headers: {
@@ -266,21 +290,41 @@ export default function RekapJasmaniPolda() {
           siswa_id: newSiswaId ? Number(newSiswaId) : null,
         }),
       });
+
       if (!r.ok) {
         // rollback kalau gagal
         setItems((old) =>
           old.map((it) => (it.id === row.id ? { ...it, siswa_id: prev } : it))
         );
-        console.error("Gagal update siswa_id:", await r.text());
-        alert("Gagal mengubah NOSIS/NAMA untuk baris ini.");
+        let msg = "";
+        try {
+          msg = await r.text();
+        } catch {}
+        throw new Error(msg || `HTTP ${r.status}`);
       }
+
+      // sukses
+      toast.update(tId, {
+        type: "success",
+        title: "Tersimpan",
+        message: newSiswaId
+          ? `Berhasil mengaitkan: ${findSiswaLabel(Number(newSiswaId))}`
+          : "Berhasil melepas kaitan siswa",
+        indeterminate: false,
+        duration: SUCCESS_CLOSE_MS,
+      });
     } catch (e) {
       // rollback kalau error
       setItems((old) =>
         old.map((it) => (it.id === row.id ? { ...it, siswa_id: prev } : it))
       );
-      console.error(e);
-      alert("Terjadi error jaringan saat update siswa.");
+      toast.update(tId, {
+        type: "error",
+        title: "Gagal menyimpan",
+        message: e?.message || "Terjadi kesalahan jaringan.",
+        indeterminate: false,
+        duration: ERROR_CLOSE_MS,
+      });
     }
   }
 

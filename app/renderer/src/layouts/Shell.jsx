@@ -1,14 +1,13 @@
-// components/Shell.jsx
 import { useEffect, useMemo, useState } from "react";
 import { ShellContext } from "../context/ShellContext";
+import ThemeToggle from "../components/ThemeToggle";
+import DownloadToasterBinder from "../components/DownloadToastBinder"; // ⬅️ tetap
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 function isActiveHref(href) {
   if (!href) return false;
   const hash = window.location.hash || "#/dashboard";
-  // Aktif jika persis sama, atau prefix + "/" (bukan sekadar prefix)
-  // Contoh: "#/import/xxx" tidak akan mengaktifkan "#/import/xx"
   return hash === href || hash.startsWith(href + "/");
 }
 
@@ -24,9 +23,9 @@ function SideLink({ item }) {
         gap: 10,
         padding: "10px 12px",
         borderRadius: 10,
-        border: active ? "1px solid #1f2937" : "1px solid transparent",
-        background: active ? "#0f1424" : "transparent",
-        color: "#cbd5e1",
+        border: active ? "1px solid var(--border)" : "1px solid transparent",
+        background: active ? "var(--panel-alt)" : "transparent",
+        color: "var(--text-muted-strong)",
         textDecoration: "none",
         fontWeight: 600,
       }}
@@ -49,7 +48,6 @@ function SideGroup({ item }) {
 
   const hasActiveChild = useMemo(() => {
     if (!item?.children?.length) return false;
-    // Untuk membuka group, kita tetap pakai startsWith agar semua route child bikin group kebuka
     return item.children.some((c) => c.href && hash.startsWith(c.href));
   }, [item, hash]);
 
@@ -82,9 +80,9 @@ function SideGroup({ item }) {
           width: "100%",
           padding: "10px 12px",
           borderRadius: 10,
-          border: open ? "1px solid #1f2937" : "1px solid transparent",
-          background: open ? "#0f1424" : "transparent",
-          color: "#cbd5e1",
+          border: open ? "1px solid var(--border)" : "1px solid transparent",
+          background: open ? "var(--panel-alt)" : "transparent",
+          color: "var(--text-muted-strong)",
           cursor: "pointer",
           textAlign: "left",
           fontWeight: 800,
@@ -106,7 +104,7 @@ function SideGroup({ item }) {
             marginTop: 6,
             marginLeft: 8,
             paddingLeft: 10,
-            borderLeft: "2px solid rgba(255,255,255,0.07)",
+            borderLeft: "2px solid var(--border-soft)",
             display: "grid",
             gap: 6,
           }}
@@ -117,7 +115,7 @@ function SideGroup({ item }) {
                 <div
                   style={{
                     height: 1,
-                    background: "rgba(255, 255, 255, 0.12)",
+                    background: "var(--divider)",
                     margin: "6px 0",
                   }}
                 />
@@ -131,12 +129,59 @@ function SideGroup({ item }) {
   );
 }
 
+// --- Brand komponen kecil untuk sidebar (pakai logo kamu) ---
+function BrandBSMS() {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "auto 1fr",
+        alignItems: "center",
+        gap: 10,
+        marginBottom: 12,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        flexShrink: 0,
+      }}
+      title="BSMS SPN Purwokerto"
+    >
+      <img
+        src="/bsms-logo.png"
+        alt="BSMS"
+        width={28}
+        height={28}
+        style={{ objectFit: "contain", borderRadius: 6 }}
+        onError={(e) => {
+          // kalau file belum ada, sembunyikan img agar layout tetap rapi
+          e.currentTarget.style.display = "none";
+        }}
+      />
+      <div style={{ lineHeight: 1.15 }}>
+        <div
+          style={{
+            fontWeight: 800,
+            fontSize: 16,
+            letterSpacing: 0.3,
+            color: "var(--text-strong)",
+          }}
+        >
+          BSMS SPN Purwokerto
+        </div>
+        <div className="muted" style={{ fontSize: 11, opacity: 0.9 }}>
+          Bhayangkara Student Management System
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Shell({
   title = "SISTEM AKADEMIK",
   children,
   onLogout,
   nav = [],
-  active, // tidak dipakai lagi untuk highlight; kita pakai hash agar child bisa aktif
+  active, // tidak dipakai lagi
   showAngkatan = false,
   onAngkatanChange,
 }) {
@@ -179,47 +224,41 @@ export default function Shell({
 
   return (
     <ShellContext.Provider value={{ angkatan, setAngkatan }}>
+      {/* Binder toast download global (cukup dipasang sekali di Shell) */}
+      <DownloadToasterBinder />
+
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "240px 1fr",
           height: "100vh",
+          overflow: "hidden",
+          background: "var(--bg)",
+          color: "var(--text)",
         }}
       >
         {/* Sidebar */}
         <aside
           style={{
-            background: "#0b1220",
-            borderRight: "1px solid #1f2937",
+            background: "var(--panel)",
+            borderRight: "1px solid var(--border)",
             padding: 16,
             display: "flex",
             flexDirection: "column",
             height: "100vh",
             width: 240,
+            overflow: "hidden",
           }}
         >
-          {/* Brand */}
-          <div
-            style={{
-              fontWeight: 800,
-              fontSize: 18,
-              letterSpacing: 0.5,
-              marginBottom: 12,
-              color: "#e2e8f0",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            SISTEM AKADEMIK
-          </div>
+          {/* Brand (ganti blok lama menjadi komponen BrandBSMS) */}
+          <BrandBSMS />
 
           {/* NAV AREA (scrollable) */}
           <div
             style={{
               flex: 1,
               overflowY: "auto",
-              paddingRight: 4, // ruang untuk scrollbar
+              paddingRight: 4,
             }}
             className="scroll-slim"
           >
@@ -234,8 +273,8 @@ export default function Shell({
             </nav>
           </div>
 
-          {/* FOOTER (non-scroll) */}
-          <div style={{ paddingTop: 12 }}>
+          {/* FOOTER */}
+          <div style={{ paddingTop: 12, flexShrink: 0 }}>
             <button
               className="btn"
               onClick={onLogout}
@@ -247,7 +286,14 @@ export default function Shell({
         </aside>
 
         {/* Right */}
-        <section style={{ display: "grid", gridTemplateRows: "64px 1fr" }}>
+        <section
+          style={{
+            display: "grid",
+            gridTemplateRows: "64px 1fr",
+            height: "100vh",
+            overflow: "hidden",
+          }}
+        >
           {/* Topbar */}
           <header
             style={{
@@ -255,20 +301,24 @@ export default function Shell({
               alignItems: "center",
               justifyContent: "space-between",
               padding: "0 16px",
-              borderBottom: "1px solid #1f2937",
-              background: "#0b1220",
+              borderBottom: "1px solid var(--border)",
+              background: "var(--panel)",
               gap: 12,
-              color: "#e2e8f0",
+              color: "var(--text)",
+              zIndex: 1,
             }}
           >
+            {/* Kamu tetap bisa override prop `title` dari luar */}
             <div style={{ fontWeight: 700 }}>{title}</div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              <ThemeToggle />
               {showAngkatan && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <label
                     htmlFor="angkatan"
-                    style={{ color: "#cbd5e1", fontSize: 14 }}
+                    className="muted"
+                    style={{ fontSize: 14 }}
                   >
                     Angkatan
                   </label>
@@ -277,9 +327,9 @@ export default function Shell({
                     value={angkatan}
                     onChange={(e) => setAngkatan(e.target.value)}
                     style={{
-                      background: "#0f1424",
-                      color: "#e5e7eb",
-                      border: "1px solid #1f2937",
+                      background: "var(--input-bg)",
+                      color: "var(--text)",
+                      border: "1px solid var(--border)",
                       borderRadius: 8,
                       padding: "6px 10px",
                       minWidth: 160,
@@ -294,7 +344,6 @@ export default function Shell({
                   </select>
                 </div>
               )}
-
               <span className="badge">Admin</span>
             </div>
           </header>

@@ -124,10 +124,6 @@ async function tableExists(table) {
   return !!chk.rows[0].tname;
 }
 
-/**
- * GET /siswa/nik/:nik/<table>
- * table ∈ { sosiometri | mental | bk | pelanggaran | mapel | prestasi | jasmani | riwayat_kesehatan }
- */
 async function sendRowsOrEmptyByNik(res, table, nik) {
   try {
     if (!(await tableExists(table))) return res.json([]);
@@ -146,9 +142,6 @@ async function sendRowsOrEmptyByNik(res, table, nik) {
   }
 }
 
-async function listSosiometri(req, res) {
-  return sendRowsOrEmptyByNik(res, "sosiometri", req.params.nik);
-}
 async function listMental(req, res) {
   return sendRowsOrEmptyByNik(res, "mental", req.params.nik);
 }
@@ -534,8 +527,6 @@ module.exports = {
   detailByNik,
   detailByNosis, // optional legacy
 
-  // relasi
-  listSosiometri, // <- bisa dihapus bila benar2 tidak dipakai
   listMental,
   listBK,
   listPelanggaran,

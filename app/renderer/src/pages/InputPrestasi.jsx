@@ -1,5 +1,5 @@
-// src/pages/InputPrestasi.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useToast } from "../components/Toaster";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
@@ -28,12 +28,6 @@ function fmtDate(v) {
   } catch {
     return String(v);
   }
-}
-function closeAfter(ms = 900) {
-  setTimeout(() => {
-    setOpen(false);
-    setOpenList(false);
-  }, ms);
 }
 const norm = (s) =>
   String(s || "")
@@ -67,8 +61,8 @@ function Modal({ open, onClose, title, children }) {
           width: "min(960px, 96vw)",
           maxHeight: "86vh",
           overflow: "auto",
-          background: "#0b1220",
-          border: "1px solid #1f2937",
+          background: "var(--panel)",
+          border: "1px solid var(--border)",
           borderRadius: 14,
           padding: 14,
         }}
@@ -95,6 +89,8 @@ function Modal({ open, onClose, title, children }) {
 
 /* ======================= Komponen utama ======================= */
 export default function InputPrestasi() {
+  const { toast } = useToast();
+
   /* ---------- state: history ---------- */
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
@@ -102,13 +98,12 @@ export default function InputPrestasi() {
   const [page, setPage] = useState(1);
   const [limit] = useState(20);
   const [loadingList, setLoadingList] = useState(false);
-  const [alert, setAlert] = useState({ type: "", text: "" }); // {type:'success'|'danger', text:''}
 
   /* ---------- state: modal form ---------- */
   const [open, setOpen] = useState(false);
 
-  const [siswaId, setSiswaId] = useState(null);     // << sama seperti Riwayat (pakai ID saja)
-  const [query, setQuery] = useState("");           // tampilan teks (NOSIS — Nama)
+  const [siswaId, setSiswaId] = useState(null); // pakai ID
+  const [query, setQuery] = useState(""); // tampilan teks (NOSIS — Nama)
   const [judul, setJudul] = useState("");
   const [tingkat, setTingkat] = useState("");
   const [deskripsi, setDeskripsi] = useState("");
@@ -133,6 +128,14 @@ export default function InputPrestasi() {
       .filter((s) => norm(s.nosis).includes(n) || norm(s.nama).includes(n))
       .slice(0, 20);
   }, [sug, q]);
+
+  // helper untuk tutup modal setelah delay
+  const closeAfter = (ms = 900) => {
+    setTimeout(() => {
+      setOpen(false);
+      setOpenList(false);
+    }, ms);
+  };
 
   /* ---------- fetch history ---------- */
   const listUrl = useMemo(() => {
@@ -171,12 +174,11 @@ export default function InputPrestasi() {
     };
   }, [listUrl]);
 
-  /* ---------- search siswa (modal) — sama seperti Riwayat ---------- */
+  /* ---------- search siswa (modal) ---------- */
   useEffect(() => {
     let stop = false;
 
     if (siswaId) {
-      // Sudah memilih siswa ⇒ jangan tampilkan dropdown lagi
       setOpenList(false);
       return;
     }
@@ -224,7 +226,7 @@ export default function InputPrestasi() {
     };
   }, [q, siswaId]);
 
-  // Tutup dropdown pada klik di luar / Esc — sama seperti Riwayat
+  // Tutup dropdown pada klik di luar / Esc
   useEffect(() => {
     function onDocClick(e) {
       const inInput = inputRef.current?.contains?.(e.target);
@@ -262,21 +264,25 @@ export default function InputPrestasi() {
 
   /* ---------- submit ---------- */
   async function submit() {
-    setAlert({ type: "", text: "" });
+    // validasi → toast error
     if (!siswaId) {
-      setAlert({ type: "danger", text: "Pilih siswa dari daftar terlebih dahulu." });
+      toast.error("Pilih siswa dari daftar terlebih dahulu.");
       return;
     }
     if (!judul.trim()) {
-      setAlert({ type: "danger", text: "Judul wajib diisi." });
+      toast.error("Judul wajib diisi.");
       return;
     }
     if (!tingkat.trim()) {
-      setAlert({ type: "danger", text: "Tingkatan wajib diisi." });
+      toast.error("Tingkatan wajib diisi.");
       return;
     }
+
+    let tId;
     try {
       setSaving(true);
+      tId = toast.loading("Menyimpan prestasi…", { autoClose: false });
+
       const token = await window.authAPI?.getToken?.();
       const form = new FormData();
       form.append("siswa_id", String(siswaId));
@@ -294,27 +300,90 @@ export default function InputPrestasi() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Gagal menyimpan prestasi");
 
-      setAlert({ type: "success", text: "Berhasil disimpan." });
+      toast.update(tId, {
+        type: "success",
+        message: "Berhasil disimpan.",
+        autoClose: 2500,
+      });
+
       // refresh list dari page 1
       setPage(1);
-      // tetap di modal; kosongkan field selain siswa agar input beruntun
+      // kosongkan field selain siswa agar input beruntun
       setJudul("");
       setTingkat("");
       setDeskripsi("");
       setFile(null);
       const el = document.getElementById("prestasiFileInput");
       if (el) el.value = "";
+
+      closeAfter(600); // tutup modal agak cepat
     } catch (e) {
-      setAlert({ type: "danger", text: `Gagal: ${e.message}` });
+      if (tId) {
+        toast.update(tId, {
+          type: "error",
+          message: `Gagal: ${e.message}`,
+          autoClose: 5000,
+        });
+      } else {
+        toast.error(`Gagal: ${e.message}`, { autoClose: 5000 });
+      }
     } finally {
       setSaving(false);
     }
-    setAlert({ type: "success", text: "Berhasil disimpan." });
-setPage(1);
-setJudul(""); setTingkat(""); setDeskripsi(""); setFile(null);
-const el = document.getElementById("prestasiFileInput"); if (el) el.value = "";
-closeAfter();
   }
+
+  /* ---------- toaster untuk progres unduhan (Electron) ---------- */
+  useEffect(() => {
+    // Dengarkan proses unduhan global
+    const off = window.electronAPI?.onDownloadStatus?.((p) => {
+      if (!p || p.type !== "download") return;
+
+      // simpan id toast pada closure
+      if (!InputPrestasi._dlToastId && p.phase === "start") {
+        InputPrestasi._dlToastId = toast.loading("Menyiapkan file…", {
+          autoClose: false,
+        });
+        return;
+      }
+
+      const id = InputPrestasi._dlToastId;
+      if (!id) return;
+
+      if (p.phase === "progress") {
+        const pct = p.total
+          ? Math.min(100, Math.round((p.received / p.total) * 100))
+          : null;
+        toast.update(id, {
+          type: "loading",
+          message:
+            pct != null
+              ? `Mengunduh… ${pct}% (${p.received} / ${p.total} bytes)`
+              : `Mengunduh… ${p.received} bytes`,
+          progress: pct ?? undefined,
+          autoClose: false,
+        });
+      } else if (p.phase === "done") {
+        toast.update(id, {
+          type: "success",
+          message: `Selesai. Tersimpan di: ${p.path}`,
+          autoClose: 6000,
+        });
+        InputPrestasi._dlToastId = null;
+      } else if (p.phase === "error") {
+        toast.update(id, {
+          type: "error",
+          message: `Gagal mengunduh: ${p.message}`,
+          autoClose: 7000,
+        });
+        InputPrestasi._dlToastId = null;
+      }
+    });
+
+    return () => {
+      off && off();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ---------- UI ---------- */
   return (
@@ -322,35 +391,28 @@ closeAfter();
       {/* Header + button */}
       <div
         className="card"
-        style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
       >
         <div>
           <div style={{ fontWeight: 800, fontSize: 18 }}>Input Prestasi</div>
-          <div className="muted">Catat prestasi per-siswa, lampiran opsional.</div>
+          <div className="muted">
+            Catat prestasi per-siswa, lampiran opsional.
+          </div>
         </div>
         <button className="btn" onClick={() => setOpen(true)}>
           + Input Prestasi
         </button>
       </div>
 
-      {/* Alerts di atas tabel */}
-      {alert.text && (
-        <div
-          className="card"
-          style={{
-            border: `1px solid ${alert.type === "success" ? "#166534" : "#7f1d1d"}`,
-            background: alert.type === "success" ? "#052e1a" : "#1b0c0c",
-            color: alert.type === "success" ? "#86efac" : "#fca5a5",
-            padding: "8px 12px",
-            borderRadius: 12,
-          }}
-        >
-          {alert.text}
-        </div>
-      )}
-
       {/* Toolbar kecil list */}
-      <div className="card" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div
+        className="card"
+        style={{ display: "flex", gap: 8, alignItems: "center" }}
+      >
         <input
           className="input"
           placeholder="Cari judul / nama / nosis …"
@@ -361,14 +423,26 @@ closeAfter();
           }}
           style={{ minWidth: 280 }}
         />
-        <div style={{ marginLeft: "auto", color: "#94a3b8" }}>Total: {total}</div>
+        <div style={{ marginLeft: "auto", color: "var(--muted)" }}>
+          Total: {total}
+        </div>
       </div>
 
       {/* Tabel history */}
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <div className="table-wrap" style={{ maxHeight: "60vh", overflow: "auto" }}>
+        <div
+          className="table-wrap"
+          style={{ maxHeight: "60vh", overflow: "auto" }}
+        >
           <table className="table" style={{ width: "100%" }}>
-            <thead style={{ position: "sticky", top: 0, background: "#0b1220", zIndex: 1 }}>
+            <thead
+              style={{
+                position: "sticky",
+                top: 0,
+                background: "var(--panel)",
+                zIndex: 1,
+              }}
+            >
               <tr>
                 <th style={{ textAlign: "left" }}>NOSIS</th>
                 <th style={{ textAlign: "left" }}>Nama</th>
@@ -399,7 +473,9 @@ closeAfter();
                     <td style={{ whiteSpace: "nowrap" }}>{r.nama ?? "-"}</td>
                     <td>{r.judul ?? "-"}</td>
                     <td style={{ whiteSpace: "nowrap" }}>{r.tingkat ?? "-"}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>{fmtDate(r.tanggal)}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {fmtDate(r.tanggal)}
+                    </td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       {r.file_path ? (
                         <button
@@ -407,19 +483,39 @@ closeAfter();
                           style={{ padding: "6px 10px" }}
                           onClick={async () => {
                             const url = buildDownloadUrl(r.file_path);
-                            if (!(await tryHead(url))) {
-                              setAlert({ type: "danger", text: "File tidak ditemukan." });
+
+                            // periksa file ada
+                            const ok = await tryHead(url);
+                            if (!ok) {
+                              toast.error("File tidak ditemukan.", {
+                                autoClose: 5000,
+                              });
                               return;
                             }
+
+                            // Mulai unduh (IPC Electron → akan update progres lewat onDownloadStatus)
                             if (window.electronAPI?.download) {
                               window.electronAPI.download(url);
+                              // munculkan toast awal jika plugin progres belum sempat kirim 'start'
+                              if (!InputPrestasi._dlToastId) {
+                                InputPrestasi._dlToastId = toast.loading(
+                                  "Menyiapkan file…",
+                                  {
+                                    autoClose: false,
+                                  }
+                                );
+                              }
                             } else {
+                              // fallback browser
                               const a = document.createElement("a");
                               a.href = url;
                               a.download = "";
                               document.body.appendChild(a);
                               a.click();
                               a.remove();
+                              toast.success("Unduhan dimulai (browser).", {
+                                autoClose: 4000,
+                              });
                             }
                           }}
                         >
@@ -429,7 +525,9 @@ closeAfter();
                         "-"
                       )}
                     </td>
-                    <td style={{ whiteSpace: "nowrap" }}>{fmtDate(r.created_at)}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {fmtDate(r.created_at)}
+                    </td>
                   </tr>
                 ))
               )}
@@ -462,7 +560,7 @@ closeAfter();
         open={open}
         onClose={() => {
           setOpen(false);
-          setOpenList(false); // ⬅ penting: tutup dropdown saat modal ditutup (persis seperti Riwayat)
+          setOpenList(false); // penting: tutup dropdown saat modal ditutup
         }}
         title="Input Prestasi"
       >
@@ -477,11 +575,9 @@ closeAfter();
               onChange={(e) => {
                 const v = e.target.value;
                 setQuery(v);
-                // saat user mengetik ulang, batalkan selection
                 if (siswaId) setSiswaId(null);
               }}
               onFocus={() => {
-                // hanya buka dropdown kalau belum memilih siswa
                 if (!siswaId && q.length >= 2) setOpenList(true);
               }}
               onKeyDown={(e) => {
@@ -500,30 +596,31 @@ closeAfter();
                   left: 0,
                   right: 0,
                   marginTop: 6,
-                  background: "#1e293b",
-                  border: "1px solid #475569",
+                  background: "var(--panel)",
+                  border: "1px solid var(--border)",
                   borderRadius: 10,
                   boxShadow: "0 10px 20px rgba(0,0,0,.35)",
                   maxHeight: 280,
                   overflow: "auto",
-                  color: "#e2e8f0",
+                  color: "var(--text)",
                 }}
               >
                 <div
                   className="muted"
                   style={{
                     padding: "8px 10px",
-                    borderBottom: "1px solid #334155",
-                    color: "#cbd5e1",
-                    background: "#243447",
+                    borderBottom: "1px solid var(--border)",
+                    background: "var(--panel-alt)",
                   }}
                 >
                   {searching ? "Mencari..." : "Pilih dari daftar:"}
                 </div>
 
                 {filteredSug.length === 0 ? (
-                  <div className="muted" style={{ padding: 10, color: "#cbd5e1" }}>
-                    {q.length < 2 ? "Ketik minimal 2 karakter." : "Tidak ada hasil."}
+                  <div className="muted" style={{ padding: 10 }}>
+                    {q.length < 2
+                      ? "Ketik minimal 2 karakter."
+                      : "Tidak ada hasil."}
                   </div>
                 ) : (
                   filteredSug.map((s) => (
@@ -536,19 +633,24 @@ closeAfter();
                         width: "100%",
                         textAlign: "left",
                         padding: "10px 12px",
-                        background: "#1f2a3a",
+                        background: "transparent",
                         border: 0,
-                        borderBottom: "1px solid #334155",
+                        borderBottom: "1px solid var(--border)",
                         cursor: "pointer",
-                        color: "#e5e7eb",
+                        color: "var(--text)",
                       }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "#2b3a55")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "#1f2a3a")}
+                      onMouseEnter={(e) =>
+                        (e.currentTarget.style.background =
+                          "var(--table-row-hover)")
+                      }
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.background = "transparent")
+                      }
                     >
                       <div style={{ fontWeight: 700 }}>
                         {String(s.nosis || "-").padStart(4, "0")} — {s.nama}
                       </div>
-                      <div className="muted" style={{ fontSize: 12, color: "#cbd5e1" }}>
+                      <div className="muted" style={{ fontSize: 12 }}>
                         {s.nik ? `NIK ${s.nik}` : "NIK -"}
                       </div>
                     </button>
@@ -631,3 +733,6 @@ closeAfter();
     </div>
   );
 }
+
+// simpan id toast unduhan pada fungsi (static properti)
+InputPrestasi._dlToastId = null;

@@ -47,11 +47,12 @@ export default function ImportExcel({
   title,
   requireAngkatan = false,
   onAfterImport, // callback ke halaman: {success, summary}
-
-  // 🔽 Tambahan untuk tombol Download Template
-  templatePath, // string: path ke server → /download?path=templatePath
-  templateUrl, // string: URL langsung (public/CDN)
+  templatePath,
+  templateUrl,
   templateLabel = "Download template",
+
+  // 🔽 Hanya kirim jenis_pendidikan kalau memang diminta (khusus Import Siswa)
+  sendJenisPendidikan = false,
 }) {
   const [file, setFile] = useState(null);
   const [result, setResult] = useState(null);
@@ -59,9 +60,26 @@ export default function ImportExcel({
   const [activeTab, setActiveTab] = useState(null); // "ok" | "skip" | "fail"
   const [angkatanOpts, setAngkatanOpts] = useState([]);
   const [angkatan, setAngkatan] = useState("");
-
-  // ringkasan terakhir (untuk badge kecil di atas tab)
   const [lastImport, setLastImport] = useState(null); // { mode:'dry'|'import', ok, skip, fail }
+
+  // Deteksi otomatis kalau endpoint = siswa
+  const looksLikeSiswa =
+    typeof endpoint === "string" &&
+    (/^siswa$/i.test(endpoint) || /\/siswa(\?|$)/i.test(endpoint));
+  const shouldSendJenis = Boolean(sendJenisPendidikan || looksLikeSiswa);
+
+  // === Jenis Pendidikan (hanya aktif/ditampilkan bila shouldSendJenis)
+  const [jenis, setJenis] = useState(() =>
+    shouldSendJenis ? localStorage.getItem("sa.jenis_pendidikan") || "" : ""
+  );
+  useEffect(() => {
+    if (!shouldSendJenis) return;
+    const onStorage = (e) => {
+      if (e.key === "sa.jenis_pendidikan") setJenis(e.newValue || "");
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [shouldSendJenis]);
 
   // warn before unload
   useEffect(() => {
@@ -120,8 +138,16 @@ export default function ImportExcel({
     setActiveTab(null);
     try {
       const token = await window.authAPI.getToken?.();
+
+      const jenisVal = shouldSendJenis
+        ? (localStorage.getItem("sa.jenis_pendidikan") || jenis || "").trim()
+        : "";
+
       const form = new FormData();
       form.append("file", file);
+      if (requireAngkatan && angkatan) form.append("angkatan", angkatan);
+      if (shouldSendJenis && jenisVal)
+        form.append("jenis_pendidikan", jenisVal);
 
       // Normalisasi endpoint
       let target;
@@ -136,10 +162,17 @@ export default function ImportExcel({
       if (dryRun) url.searchParams.set("dryRun", "true");
       if (requireAngkatan && angkatan)
         url.searchParams.set("angkatan", angkatan);
+      if (shouldSendJenis && jenisVal)
+        url.searchParams.set("jenis_pendidikan", jenisVal);
+
+      // ⬇️ Hanya Authorization; tidak ada header kustom agar aman CORS
+      const headers = {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
 
       const res = await fetch(url.toString(), {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers,
         body: form,
       });
 
@@ -184,11 +217,7 @@ export default function ImportExcel({
       // Callback ke parent
       const success = res.ok && !dryRun && !data?.error;
       if (!dryRun && typeof onAfterImport === "function") {
-        onAfterImport({
-          success,
-          summary: s,
-          raw: normalized,
-        });
+        onAfterImport({ success, summary: s, raw: normalized });
       }
     } catch (e) {
       setResult({ error: e.message || "Gagal import" });
@@ -239,6 +268,23 @@ export default function ImportExcel({
         <div>
           <div style={{ fontWeight: 800, fontSize: 18 }}>{title}</div>
           <div className="muted">Gunakan file .xlsx sesuai template</div>
+          {/* Tampilkan badge jenis hanya jika diperlukan */}
+          {shouldSendJenis && (
+            <div style={{ marginTop: 8 }}>
+              <span
+                className="badge"
+                title="Jenis Pendidikan aktif"
+                style={{
+                  background: "#0b1324",
+                  border: "1px solid #1f2937",
+                  color: "#e5e7eb",
+                }}
+              >
+                Jenis Pendidikan:
+                <b style={{ marginLeft: 6 }}>{jenis || "— belum dipilih —"}</b>
+              </span>
+            </div>
+          )}
         </div>
 
         {showTemplateBtn && (

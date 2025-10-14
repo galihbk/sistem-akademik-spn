@@ -1,6 +1,7 @@
-// src/pages/RekapJasmani.jsx
+// renderer/src/pages/RekapJasmani.jsx
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { useShell } from "../context/ShellContext";
+import { useToast } from "../components/Toaster";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
@@ -9,8 +10,13 @@ const W_NAMA = 280;
 const W_TEXT = 110;
 const W_NUM = 90;
 
+// durasi auto-close
+const SUCCESS_CLOSE_MS = 5000; // 5s
+const ERROR_CLOSE_MS = 6000; // 6s
+
 export default function RekapJasmani() {
   const { angkatan: angkatanFromShell } = useShell();
+  const toast = useToast();
 
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
@@ -25,8 +31,6 @@ export default function RekapJasmani() {
   const [angkatanFilter, setAngkatanFilter] = useState("");
   const [tahap, setTahap] = useState(""); // "" = auto tahap terakhir
 
-  // status export
-  const [exportInfo, setExportInfo] = useState(null);
   const [exporting, setExporting] = useState(false);
 
   // ambil daftar angkatan
@@ -104,19 +108,10 @@ export default function RekapJasmani() {
     return u.toString();
   }
 
-  async function downloadViaFetch(url, suggestedName = "rekap-jasmani.xlsx") {
-    const token = await window.authAPI?.getToken?.();
-    const res = await fetch(url, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(text || `HTTP ${res.status}`);
-    }
-    const blob = await res.blob();
+  function triggerDownloadBlob(blob, filename) {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = suggestedName;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     setTimeout(() => {
@@ -125,10 +120,116 @@ export default function RekapJasmani() {
     }, 0);
   }
 
+  function formatBytes(b) {
+    if (!b) return "0 B";
+    const u = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(b) / Math.log(1024));
+    return `${(b / Math.pow(1024, i)).toFixed(1)} ${u[i]}`;
+  }
+
+  // --- WEB (non-Electron): fetch streaming dengan progress + error-handling
+  async function downloadViaFetchWithProgress(
+    url,
+    suggestedName = "rekap-jasmani.xlsx"
+  ) {
+    let tid = null;
+    try {
+      const token = await window.authAPI?.getToken?.();
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
+      if (!res.ok) {
+        let text = "";
+        try {
+          text = await res.text();
+        } catch {}
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+
+      const contentLength = Number(res.headers.get("content-length") || 0);
+      tid = toast.show({
+        type: "loading",
+        title: "Mengunduh file…",
+        message: contentLength
+          ? "Menghitung progres unduhan"
+          : "Ukuran tidak diketahui",
+        progress: contentLength ? 0 : null,
+        indeterminate: !contentLength,
+        canDismiss: true,
+        duration: 0, // loading: tidak auto-close
+      });
+
+      const reader = res.body?.getReader?.();
+      if (!reader) {
+        const blob = await res.blob();
+        triggerDownloadBlob(blob, suggestedName);
+        toast.update(tid, {
+          type: "success",
+          title: "Selesai",
+          message: `File tersimpan (${suggestedName}).`,
+          progress: 100,
+          indeterminate: false,
+          duration: SUCCESS_CLOSE_MS,
+        });
+        return;
+      }
+
+      let loaded = 0;
+      const chunks = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.byteLength;
+        if (contentLength) {
+          const pct = (loaded / contentLength) * 100;
+          toast.update(tid, {
+            message: `Mengunduh ${formatBytes(loaded)} / ${formatBytes(
+              contentLength
+            )}`,
+            progress: pct,
+            indeterminate: false,
+          });
+        }
+      }
+
+      const blob = new Blob(chunks);
+      triggerDownloadBlob(blob, suggestedName);
+
+      toast.update(tid, {
+        type: "success",
+        title: "Unduhan selesai",
+        message: `File: ${suggestedName}`,
+        progress: 100,
+        indeterminate: false,
+        duration: SUCCESS_CLOSE_MS,
+      });
+    } catch (e) {
+      if (tid) {
+        toast.update(tid, {
+          type: "error",
+          title: "Gagal unduh",
+          message: e?.message || "Terjadi kesalahan saat mengunduh.",
+          duration: ERROR_CLOSE_MS,
+          indeterminate: false,
+        });
+      } else {
+        toast.show({
+          type: "error",
+          title: "Gagal unduh",
+          message: e?.message || "Terjadi kesalahan saat mengunduh.",
+          duration: ERROR_CLOSE_MS,
+        });
+      }
+      throw e;
+    }
+  }
+
   async function exportExcelAll() {
+    let tid = null; // toast id untuk Electron branch
     try {
       setExporting(true);
-      setExportInfo({ state: "preparing" });
 
       const url = buildExportUrl();
       const ts = new Date();
@@ -138,52 +239,106 @@ export default function RekapJasmani() {
       const hh = String(ts.getHours()).padStart(2, "0");
       const mm = String(ts.getMinutes()).padStart(2, "0");
       const ss = String(ts.getSeconds()).padStart(2, "0");
-      const fname = `rekap-jasmani${angkatanEffective ? `-angkatan-${angkatanEffective}` : ""}${tahap !== "" ? `-tahap-${tahap}` : ""}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
+      const fname = `rekap-jasmani${
+        angkatanEffective ? `-angkatan-${angkatanEffective}` : ""
+      }${
+        tahap !== "" ? `-tahap-${tahap}` : ""
+      }-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
 
       if (window.electronAPI?.download) {
-        await window.electronAPI.download(url); // Electron: simpan ke Downloads
-        setExportInfo({
-          state: "done",
-          pathHint: "Downloads",
-          filename: "(periksa file terbaru di Downloads)",
+        const info = await window.electronAPI
+          .getDefaultDownloadsDir()
+          .catch(() => null);
+        tid = toast.show({
+          type: "loading",
+          title: "Menyiapkan unduhan…",
+          message: info?.dir
+            ? `Menyimpan ke: ${info.dir}`
+            : "Menyimpan berkas…",
+          indeterminate: true,
+          canDismiss: true,
+          duration: 0, // loading: tidak auto-close
+        });
+
+        const res = await window.electronAPI.download(url, fname);
+        if (!res?.ok) {
+          throw new Error(res?.message || "Gagal mengunduh");
+        }
+
+        const fullPath = res.path;
+        toast.update(tid, {
+          type: "success",
+          title: "Selesai",
+          message: `Tersimpan: ${fullPath}`,
+          indeterminate: false,
+          duration: SUCCESS_CLOSE_MS, // auto-close
         });
       } else {
-        await downloadViaFetch(url, fname);
-        setExportInfo({ state: "done", pathHint: "browser", filename: fname });
+        await downloadViaFetchWithProgress(url, fname);
       }
-
-      setTimeout(() => setExportInfo(null), 5000);
     } catch (e) {
-      setExportInfo({ state: "error", message: e.message || "Gagal export." });
-      setTimeout(() => setExportInfo(null), 6000);
+      if (tid) {
+        toast.update(tid, {
+          type: "error",
+          title: "Gagal export",
+          message: e?.message || "Terjadi kesalahan saat mengunduh.",
+          duration: ERROR_CLOSE_MS, // auto-close
+          indeterminate: false,
+        });
+      } else {
+        toast.show({
+          type: "error",
+          title: "Gagal export",
+          message: e?.message || "Terjadi kesalahan saat mengunduh.",
+          duration: ERROR_CLOSE_MS,
+        });
+      }
     } finally {
       setExporting(false);
     }
   }
 
   // sticky helpers
+  // ==== helpers (sticky) – GANTI SEMUA WARNA KE VAR() ====
   const stickyLeftTH = (px) => ({
     position: "sticky",
     top: 0,
     left: px,
-    background: "#0b1220",
-    zIndex: 6,
-    boxShadow: px ? "6px 0 10px rgba(0,0,0,.35)" : "inset 0 -1px 0 #1f2937",
+    background: "var(--table-header-bg)",
+    zIndex: 6, // header di atas sel
+    boxShadow: px
+      ? "var(--table-sticky-shadow-left)"
+      : "inset 0 -1px 0 var(--border)",
   });
   const stickyLeftTD = (px) => ({
     position: "sticky",
     left: px,
-    background: "#0b1220",
+    background: "var(--panel)",
     zIndex: 5,
-    boxShadow: px ? "6px 0 10px rgba(0,0,0,.35)" : "none",
+    boxShadow: px ? "var(--table-sticky-shadow-left)" : "none",
   });
-  const stickyTop = { position: "sticky", top: 0, background: "#0b1220", zIndex: 4 };
-  const thBase = { whiteSpace: "nowrap", fontWeight: 700, borderBottom: "1px solid #1f2937" };
-  const numCell = { textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
+  const stickyTop = {
+    position: "sticky",
+    top: 0,
+    background: "var(--table-header-bg)",
+    zIndex: 4,
+  };
+  const thBase = {
+    whiteSpace: "nowrap",
+    fontWeight: 700,
+    borderBottom: "1px solid var(--border)",
+  };
+  const numCell = {
+    textAlign: "right",
+    fontVariantNumeric: "tabular-nums",
+    whiteSpace: "nowrap",
+  };
+
   const centerCell = { textAlign: "center", whiteSpace: "nowrap" };
 
   const fmtNum = (v) => (v == null || Number.isNaN(v) ? "-" : Number(v));
-  const fmtRank = (r) => (r?.pos != null && r?.total ? `${r.pos}/${r.total}` : "-");
+  const fmtRank = (r) =>
+    r?.pos != null && r?.total ? `${r.pos}/${r.total}` : "-";
 
   const groups = [
     { key: "lari_12_menit", label: "Lari 12 Menit" },
@@ -207,7 +362,9 @@ export default function RekapJasmani() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label htmlFor="angkatan" className="muted">Angkatan</label>
+          <label htmlFor="angkatan" className="muted">
+            Angkatan
+          </label>
           <select
             id="angkatan"
             value={angkatanFilter}
@@ -223,7 +380,9 @@ export default function RekapJasmani() {
           >
             <option value="">Semua</option>
             {angkatanOpts.map((opt) => (
-              <option key={opt} value={opt}>{opt}</option>
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
             ))}
           </select>
         </div>
@@ -292,7 +451,14 @@ export default function RekapJasmani() {
           />
         </div>
 
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+        <div
+          style={{
+            marginLeft: "auto",
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+          }}
+        >
           <button
             className="btn"
             onClick={exportExcelAll}
@@ -305,26 +471,6 @@ export default function RekapJasmani() {
           <div className="muted">Total: {total}</div>
         </div>
       </div>
-
-      {/* Notif Export */}
-      {exportInfo && (
-        <div
-          className="card"
-          style={{
-            marginBottom: 12,
-            border: exportInfo.state === "error" ? "1px solid #7f1d1d" : "1px solid #1f2937",
-            background: exportInfo.state === "error" ? "#2a0b0b" : "#0f1424",
-            color: exportInfo.state === "error" ? "#fecaca" : "#e5e7eb",
-          }}
-          role="status"
-          aria-live="polite"
-        >
-          {exportInfo.state === "preparing" && "Menyiapkan file export…"}
-          {exportInfo.state === "done" &&
-            `File export dikirim ke ${exportInfo.pathHint}. ${exportInfo.filename || ""}`}
-          {exportInfo.state === "error" && `Gagal export: ${exportInfo.message}`}
-        </div>
-      )}
 
       {/* Table */}
       <div className="card" style={{ padding: 0 }}>
@@ -339,46 +485,159 @@ export default function RekapJasmani() {
             }}
           >
             <thead>
-              {/* baris 1: header grup */}
               <tr>
-                <th rowSpan={2} style={{ ...thBase, ...stickyLeftTH(0), minWidth: W_NOSIS, width: W_NOSIS }}>
+                <th
+                  rowSpan={2}
+                  style={{
+                    ...thBase,
+                    ...stickyLeftTH(0),
+                    minWidth: W_NOSIS,
+                    width: W_NOSIS,
+                  }}
+                >
                   NOSIS
                 </th>
-                <th rowSpan={2} style={{ ...thBase, ...stickyLeftTH(W_NOSIS), minWidth: W_NAMA, width: W_NAMA }}>
+                <th
+                  rowSpan={2}
+                  style={{
+                    ...thBase,
+                    ...stickyLeftTH(W_NOSIS),
+                    minWidth: W_NAMA,
+                    width: W_NAMA,
+                  }}
+                >
                   Nama
                 </th>
-                <th rowSpan={2} style={{ ...thBase, ...stickyTop, textAlign: "left", minWidth: W_TEXT }}>
+                <th
+                  rowSpan={2}
+                  style={{
+                    ...thBase,
+                    ...stickyTop,
+                    textAlign: "left",
+                    minWidth: W_TEXT,
+                  }}
+                >
                   Angkatan
                 </th>
-                <th rowSpan={2} style={{ ...thBase, ...stickyTop, ...centerCell, minWidth: 80 }}>
+                <th
+                  rowSpan={2}
+                  style={{
+                    ...thBase,
+                    ...stickyTop,
+                    ...centerCell,
+                    minWidth: 80,
+                  }}
+                >
                   Tahap
                 </th>
 
-                <th rowSpan={2} style={{ ...thBase, ...stickyTop, ...centerCell, minWidth: 110 }}>R. Global</th>
-                <th rowSpan={2} style={{ ...thBase, ...stickyTop, ...centerCell, minWidth: 110 }}>R. Batalion</th>
-                <th rowSpan={2} style={{ ...thBase, ...stickyTop, ...centerCell, minWidth: 100 }}>R. Kompi</th>
-                <th rowSpan={2} style={{ ...thBase, ...stickyTop, ...centerCell, minWidth: 110 }}>R. Pleton</th>
+                <th
+                  rowSpan={2}
+                  style={{
+                    ...thBase,
+                    ...stickyTop,
+                    ...centerCell,
+                    minWidth: 110,
+                  }}
+                >
+                  R. Global
+                </th>
+                <th
+                  rowSpan={2}
+                  style={{
+                    ...thBase,
+                    ...stickyTop,
+                    ...centerCell,
+                    minWidth: 110,
+                  }}
+                >
+                  R. Batalion
+                </th>
+                <th
+                  rowSpan={2}
+                  style={{
+                    ...thBase,
+                    ...stickyTop,
+                    ...centerCell,
+                    minWidth: 100,
+                  }}
+                >
+                  R. Kompi
+                </th>
+                <th
+                  rowSpan={2}
+                  style={{
+                    ...thBase,
+                    ...stickyTop,
+                    ...centerCell,
+                    minWidth: 110,
+                  }}
+                >
+                  R. Pleton
+                </th>
 
                 {groups.map((g) => (
-                  <th key={`grp-${g.key}`} colSpan={2} style={{ ...thBase, ...stickyTop, textAlign: "center", minWidth: W_NUM * 2 }}>
+                  <th
+                    key={`grp-${g.key}`}
+                    colSpan={2}
+                    style={{
+                      ...thBase,
+                      ...stickyTop,
+                      textAlign: "center",
+                      minWidth: W_NUM * 2,
+                    }}
+                  >
                     {g.label}
                   </th>
                 ))}
 
-                <th rowSpan={2} style={{ ...thBase, ...stickyTop, ...numCell, minWidth: W_NUM }}>
+                <th
+                  rowSpan={2}
+                  style={{
+                    ...thBase,
+                    ...stickyTop,
+                    ...numCell,
+                    minWidth: W_NUM,
+                  }}
+                >
                   Nilai Akhir
                 </th>
-                <th rowSpan={2} style={{ ...thBase, ...stickyTop, textAlign: "left", minWidth: 220 }}>
+                <th
+                  rowSpan={2}
+                  style={{
+                    ...thBase,
+                    ...stickyTop,
+                    textAlign: "left",
+                    minWidth: 220,
+                  }}
+                >
                   Keterangan
                 </th>
               </tr>
 
-              {/* baris 2: subkolom TS / RS */}
               <tr>
                 {groups.map((g) => (
                   <Fragment key={`sub-${g.key}`}>
-                    <th style={{ ...thBase, ...stickyTop, ...centerCell, minWidth: W_NUM }}>TS</th>
-                    <th style={{ ...thBase, ...stickyTop, ...centerCell, minWidth: W_NUM }}>RS</th>
+                    <th
+                      style={{
+                        ...thBase,
+                        ...stickyTop,
+                        ...centerCell,
+                        minWidth: W_NUM,
+                      }}
+                    >
+                      TS
+                    </th>
+                    <th
+                      style={{
+                        ...thBase,
+                        ...stickyTop,
+                        ...centerCell,
+                        minWidth: W_NUM,
+                      }}
+                    >
+                      RS
+                    </th>
                   </Fragment>
                 ))}
               </tr>
@@ -388,12 +647,7 @@ export default function RekapJasmani() {
               {items.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={
-                      4 /* ident */ +
-                      4 /* rank */ +
-                      groups.length * 2 +
-                      2 /* nilai akhir + ket */
-                    }
+                    colSpan={4 + 4 + groups.length * 2 + 2}
                     className="muted"
                     style={{ padding: 12 }}
                   >
@@ -403,33 +657,75 @@ export default function RekapJasmani() {
               ) : (
                 items.map((r, i) => (
                   <tr key={`${r.nosis}-${i}`}>
-                    <td style={{ ...stickyLeftTD(0), minWidth: W_NOSIS, width: W_NOSIS }}>{r.nosis ?? "-"}</td>
-                    <td style={{ ...stickyLeftTD(W_NOSIS), minWidth: W_NAMA, width: W_NAMA }}>{r.nama ?? "-"}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>{r.kelompok_angkatan ?? "-"}</td>
+                    <td
+                      style={{
+                        ...stickyLeftTD(0),
+                        minWidth: W_NOSIS,
+                        width: W_NOSIS,
+                      }}
+                    >
+                      {r.nosis ?? "-"}
+                    </td>
+                    <td
+                      style={{
+                        ...stickyLeftTD(W_NOSIS),
+                        minWidth: W_NAMA,
+                        width: W_NAMA,
+                      }}
+                    >
+                      {r.nama ?? "-"}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {r.kelompok_angkatan ?? "-"}
+                    </td>
                     <td style={{ ...centerCell }}>{r.tahap ?? "-"}</td>
 
                     <td style={{ ...centerCell }}>{fmtRank(r.rank?.global)}</td>
-                    <td style={{ ...centerCell }}>{fmtRank(r.rank?.batalion)}</td>
+                    <td style={{ ...centerCell }}>
+                      {fmtRank(r.rank?.batalion)}
+                    </td>
                     <td style={{ ...centerCell }}>{fmtRank(r.rank?.kompi)}</td>
                     <td style={{ ...centerCell }}>{fmtRank(r.rank?.pleton)}</td>
 
-                    <td style={{ ...numCell }}>{fmtNum(r.nilai?.lari_12_menit?.ts)}</td>
-                    <td style={{ ...numCell }}>{fmtNum(r.nilai?.lari_12_menit?.rs)}</td>
+                    <td style={{ ...numCell }}>
+                      {fmtNum(r.nilai?.lari_12_menit?.ts)}
+                    </td>
+                    <td style={{ ...numCell }}>
+                      {fmtNum(r.nilai?.lari_12_menit?.rs)}
+                    </td>
 
-                    <td style={{ ...numCell }}>{fmtNum(r.nilai?.sit_up?.ts)}</td>
-                    <td style={{ ...numCell }}>{fmtNum(r.nilai?.sit_up?.rs)}</td>
+                    <td style={{ ...numCell }}>
+                      {fmtNum(r.nilai?.sit_up?.ts)}
+                    </td>
+                    <td style={{ ...numCell }}>
+                      {fmtNum(r.nilai?.sit_up?.rs)}
+                    </td>
 
-                    <td style={{ ...numCell }}>{fmtNum(r.nilai?.shuttle_run?.ts)}</td>
-                    <td style={{ ...numCell }}>{fmtNum(r.nilai?.shuttle_run?.rs)}</td>
+                    <td style={{ ...numCell }}>
+                      {fmtNum(r.nilai?.shuttle_run?.ts)}
+                    </td>
+                    <td style={{ ...numCell }}>
+                      {fmtNum(r.nilai?.shuttle_run?.rs)}
+                    </td>
 
-                    <td style={{ ...numCell }}>{fmtNum(r.nilai?.push_up?.ts)}</td>
-                    <td style={{ ...numCell }}>{fmtNum(r.nilai?.push_up?.rs)}</td>
+                    <td style={{ ...numCell }}>
+                      {fmtNum(r.nilai?.push_up?.ts)}
+                    </td>
+                    <td style={{ ...numCell }}>
+                      {fmtNum(r.nilai?.push_up?.rs)}
+                    </td>
 
-                    <td style={{ ...numCell }}>{fmtNum(r.nilai?.pull_up?.ts)}</td>
-                    <td style={{ ...numCell }}>{fmtNum(r.nilai?.pull_up?.rs)}</td>
+                    <td style={{ ...numCell }}>
+                      {fmtNum(r.nilai?.pull_up?.ts)}
+                    </td>
+                    <td style={{ ...numCell }}>
+                      {fmtNum(r.nilai?.pull_up?.rs)}
+                    </td>
 
                     <td style={{ ...numCell }}>{fmtNum(r.nilai_akhir)}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>{r.keterangan ?? ""}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {r.keterangan ?? ""}
+                    </td>
                   </tr>
                 ))
               )}
@@ -439,15 +735,62 @@ export default function RekapJasmani() {
       </div>
 
       {/* Pagination */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
-        <button className="btn" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+      <div
+        style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}
+      >
+        <button
+          className="btn"
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page <= 1}
+        >
           Prev
         </button>
         <span className="badge">Page {page}</span>
-        <button className="btn" onClick={() => setPage((p) => p + 1)} disabled={items.length < limit}>
+        <button
+          className="btn"
+          onClick={() => setPage((p) => p + 1)}
+          disabled={items.length < limit}
+        >
           Next
         </button>
       </div>
     </>
   );
 }
+
+/* ===== util layout table ===== */
+const stickyTop = {
+  position: "sticky",
+  top: 0,
+  background: "#0b1220",
+  zIndex: 4,
+};
+const thBase = {
+  whiteSpace: "nowrap",
+  fontWeight: 700,
+  borderBottom: "1px solid #1f2937",
+};
+const numCell = {
+  textAlign: "right",
+  fontVariantNumeric: "tabular-nums",
+  whiteSpace: "nowrap",
+};
+const centerCell = { textAlign: "center", whiteSpace: "nowrap" };
+const stickyLeftTH = (px) => ({
+  position: "sticky",
+  top: 0,
+  left: px,
+  background: "#0b1220",
+  zIndex: 6,
+  boxShadow: px ? "6px 0 10px rgba(0,0,0,.35)" : "inset 0 -1px 0 #1f2937",
+});
+const stickyLeftTD = (px) => ({
+  position: "sticky",
+  left: px,
+  background: "#0b1220",
+  zIndex: 5,
+  boxShadow: px ? "6px 0 10px rgba(0,0,0,.35)" : "none",
+});
+const fmtNum = (v) => (v == null || Number.isNaN(v) ? "-" : Number(v));
+const fmtRank = (r) =>
+  r?.pos != null && r?.total ? `${r.pos}/${r.total}` : "-";

@@ -103,13 +103,14 @@ function SummaryItem({ label, children }) {
   return (
     <div
       style={{
-        border: "1px solid #1f2937",
-        background: "#0f1424",
+        border: "1px solid var(--border)",
+        background: "var(--panel)",
+        color: "var(--text)",
         borderRadius: 10,
         padding: "10px 12px",
       }}
     >
-      <div className="muted" style={{ fontSize: 12 }}>
+      <div className="muted" style={{ fontSize: 12, color: "var(--muted)" }}>
         {label}
       </div>
       <div style={{ fontWeight: 800, fontSize: 18 }}>{children}</div>
@@ -122,13 +123,14 @@ function RankItem({ label, pos, total }) {
   return (
     <div
       style={{
-        border: "1px solid #1f2937",
-        background: "#0f1424",
+        border: "1px solid var(--border)",
+        background: "var(--panel)",
+        color: "var(--text)",
         borderRadius: 10,
         padding: "10px 12px",
       }}
     >
-      <div className="muted" style={{ fontSize: 12 }}>
+      <div className="muted" style={{ fontSize: 12, color: "var(--muted)" }}>
         {label}
       </div>
       <div style={{ fontWeight: 800, fontSize: 18 }}>
@@ -141,10 +143,10 @@ function RankItem({ label, pos, total }) {
 function Field({ label, children }) {
   return (
     <div style={{ marginBottom: 10 }}>
-      <div className="muted" style={{ fontSize: 12 }}>
+      <div className="muted" style={{ fontSize: 12, color: "var(--muted)" }}>
         {label}
       </div>
-      <div>{children || "-"}</div>
+      <div style={{ color: "var(--text)" }}>{children || "-"}</div>
     </div>
   );
 }
@@ -168,7 +170,7 @@ function renderValue(key, val) {
           height: 220,
           objectFit: "cover",
           borderRadius: 8,
-          border: "1px solid #1f2937",
+          border: "1px solid var(--border)",
         }}
         onError={(e) => {
           e.currentTarget.src =
@@ -188,7 +190,7 @@ function renderValue(key, val) {
         href={href}
         target="_blank"
         rel="noreferrer"
-        style={{ color: "#60a5fa" }}
+        style={{ color: "var(--link, #60a5fa)" }}
       >
         Lihat KTP
       </a>
@@ -213,10 +215,10 @@ function DataTable({ rows }) {
     [rows]
   );
   if (!rows?.length)
-    return <div style={{ color: "#94a3b8" }}>Belum ada data.</div>;
+    return <div style={{ color: "var(--muted)" }}>Belum ada data.</div>;
   return (
     <div style={{ overflowX: "auto" }}>
-      <table className="table">
+      <table className="table" style={{ color: "var(--text)" }}>
         <thead>
           <tr>
             {headers.map((h) => (
@@ -304,8 +306,9 @@ function MentalTable({ rows, rank }) {
           marginBottom: 12,
           display: "grid",
           gap: 10,
-          border: "1px solid #1f2937",
-          background: "#0b1220",
+          border: "1px solid var(--border)",
+          background: "var(--panel)",
+          color: "var(--text)",
           borderRadius: 12,
           padding: 12,
         }}
@@ -313,7 +316,10 @@ function MentalTable({ rows, rank }) {
         <div style={{ fontWeight: 800 }}>
           Ringkasan
           {rank?.angkatan ? (
-            <span className="muted" style={{ marginLeft: 8, fontWeight: 400 }}>
+            <span
+              className="muted"
+              style={{ marginLeft: 8, fontWeight: 400, color: "var(--muted)" }}
+            >
               · Ranking Angkatan <b>{rank.angkatan}</b>
             </span>
           ) : null}
@@ -375,7 +381,7 @@ function MentalTable({ rows, rank }) {
           </div>
         ) : null}
 
-        <div className="muted" style={{ fontSize: 12 }}>
+        <div className="muted" style={{ fontSize: 12, color: "var(--muted)" }}>
           Hanya nilai numeric (mis. <code>78</code>, <code>80,5</code>→80.5)
           yang dihitung untuk ringkasan.
         </div>
@@ -383,7 +389,10 @@ function MentalTable({ rows, rank }) {
 
       {norm.length ? (
         <div style={{ overflowX: "auto" }}>
-          <table className="table" style={{ width: "100%" }}>
+          <table
+            className="table"
+            style={{ width: "100%", color: "var(--text)" }}
+          >
             <thead>
               <tr>
                 <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
@@ -421,59 +430,57 @@ function MentalTable({ rows, rank }) {
           </table>
         </div>
       ) : (
-        <div style={{ color: "#94a3b8" }}>Belum ada data.</div>
+        <div style={{ color: "var(--muted)" }}>Belum ada data.</div>
       )}
     </>
   );
 }
+
 function JasmaniTable({ rows, rank }) {
   const norm = useMemo(() => {
     if (!Array.isArray(rows)) return [];
-    return (
-      rows
-        .map((r) => {
-          const jenis =
-            r.jenis_test ??
-            r.jenis ??
-            r.test ??
-            r.nama_test ??
-            r.kategori ??
-            r.item ??
-            "-";
+    return rows
+      .map((r) => {
+        const jenis =
+          r.jenis_test ??
+          r.jenis ??
+          r.test ??
+          r.nama_test ??
+          r.kategori ??
+          r.item ??
+          "-";
 
-          const nilaiRaw =
-            r.nilai ?? r.skor ?? r.value ?? r.score ?? r.penilaian ?? null;
-          const nilai = nilaiRaw == null ? null : String(nilaiRaw);
-          const nilaiNum = toNumberOrNull(nilai);
+        const nilaiRaw =
+          r.nilai ?? r.skor ?? r.value ?? r.score ?? r.penilaian ?? null;
+        const nilai = nilaiRaw == null ? null : String(nilaiRaw);
+        const nilaiNum = toNumberOrNull(nilai);
 
-          const catatan = r.catatan ?? r.note ?? r.keterangan ?? null;
+        const catatan = r.catatan ?? r.note ?? r.keterangan ?? null;
 
-          const ts =
-            r.updated_at ??
-            r.updatedAt ??
-            r.created_at ??
-            r.createdAt ??
-            r.tanggal ??
-            null;
+        const ts =
+          r.updated_at ??
+          r.updatedAt ??
+          r.created_at ??
+          r.createdAt ??
+          r.tanggal ??
+          null;
 
-          const time = ts ? new Date(ts) : null;
+        const time = ts ? new Date(ts) : null;
 
-          return {
-            jenis: String(jenis),
-            nilai,
-            nilaiNum,
-            catatan: catatan == null ? null : String(catatan),
-            time,
-          };
-        })
-        // urutkan per jenis lalu terbaru di atas
-        .sort((a, b) => {
-          const n = a.jenis.localeCompare(b.jenis, "id");
-          if (n !== 0) return n;
-          if (a.time && b.time) return b.time - a.time;
-          return 0;
-        })
-    );
+        return {
+          jenis: String(jenis),
+          nilai,
+          nilaiNum,
+          catatan: catatan == null ? null : String(catatan),
+          time,
+        };
+      })
+      .sort((a, b) => {
+        const n = a.jenis.localeCompare(b.jenis, "id");
+        if (n !== 0) return n;
+        if (a.time && b.time) return b.time - a.time;
+        return 0;
+      });
   }, [rows]);
 
   const summary = useMemo(() => {
@@ -492,15 +499,15 @@ function JasmaniTable({ rows, rank }) {
 
   return (
     <>
-      {/* Ringkasan + Ranking (gaya Mental) */}
       <div
         className="card"
         style={{
           marginBottom: 12,
           display: "grid",
           gap: 10,
-          border: "1px solid #1f2937",
-          background: "#0b1220",
+          border: "1px solid var(--border)",
+          background: "var(--panel)",
+          color: "var(--text)",
           borderRadius: 12,
           padding: 12,
         }}
@@ -508,7 +515,10 @@ function JasmaniTable({ rows, rank }) {
         <div style={{ fontWeight: 800 }}>
           Ringkasan
           {rank?.angkatan ? (
-            <span className="muted" style={{ marginLeft: 8, fontWeight: 400 }}>
+            <span
+              className="muted"
+              style={{ marginLeft: 8, fontWeight: 400, color: "var(--muted)" }}
+            >
               · Ranking Angkatan <b>{rank.angkatan}</b>
             </span>
           ) : null}
@@ -571,10 +581,12 @@ function JasmaniTable({ rows, rank }) {
         ) : null}
       </div>
 
-      {/* Tabel: Jenis Test | Nilai | Catatan | Created At */}
       {norm.length ? (
         <div style={{ overflowX: "auto" }}>
-          <table className="table" style={{ width: "100%" }}>
+          <table
+            className="table"
+            style={{ width: "100%", color: "var(--text)" }}
+          >
             <thead>
               <tr>
                 <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
@@ -608,11 +620,12 @@ function JasmaniTable({ rows, rank }) {
           </table>
         </div>
       ) : (
-        <div style={{ color: "#94a3b8" }}>Belum ada data.</div>
+        <div style={{ color: "var(--muted)" }}>Belum ada data.</div>
       )}
     </>
   );
 }
+
 /* ---------- MapelTable (DISTINCT mapel, kolom pertemuan dinamis + ringkasan & ranking) ---------- */
 
 function MapelTable({ rows, rank }) {
@@ -698,15 +711,15 @@ function MapelTable({ rows, rank }) {
 
   return (
     <>
-      {/* Ringkasan + Ranking (gaya Mental) */}
       <div
         className="card"
         style={{
           marginBottom: 12,
           display: "grid",
           gap: 10,
-          border: "1px solid #1f2937",
-          background: "#0b1220",
+          border: "1px solid var(--border)",
+          background: "var(--panel)",
+          color: "var(--text)",
           borderRadius: 12,
           padding: 12,
         }}
@@ -714,7 +727,10 @@ function MapelTable({ rows, rank }) {
         <div style={{ fontWeight: 800 }}>
           Ringkasan
           {rank?.angkatan ? (
-            <span className="muted" style={{ marginLeft: 8, fontWeight: 400 }}>
+            <span
+              className="muted"
+              style={{ marginLeft: 8, fontWeight: 400, color: "var(--muted)" }}
+            >
               · Ranking Angkatan <b>{rank.angkatan}</b>
             </span>
           ) : null}
@@ -777,7 +793,6 @@ function MapelTable({ rows, rank }) {
         ) : null}
       </div>
 
-      {/* >>> Scroll HANYA di tabel <<< */}
       {mapelList.length ? (
         <div
           style={{
@@ -786,7 +801,6 @@ function MapelTable({ rows, rank }) {
             overscrollBehaviorX: "contain",
           }}
         >
-          {/* lapisan ini mencegah body melebar */}
           <div style={{ display: "inline-block", minWidth: "100%" }}>
             <table
               className="table"
@@ -794,10 +808,10 @@ function MapelTable({ rows, rank }) {
                 width: "100%",
                 tableLayout: "auto",
                 borderCollapse: "separate",
+                color: "var(--text)",
               }}
             >
               <thead>
-                {/* Baris 1: Mapel | Pertemuan (span semua minggu) */}
                 <tr>
                   <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
                     Mapel
@@ -810,7 +824,6 @@ function MapelTable({ rows, rank }) {
                   </th>
                 </tr>
 
-                {/* Baris 2: header per-minggu */}
                 <tr>
                   <th style={{ textAlign: "left", whiteSpace: "nowrap" }} />
                   {pertemuanList.map((p) => (
@@ -853,7 +866,7 @@ function MapelTable({ rows, rank }) {
           </div>
         </div>
       ) : (
-        <div style={{ color: "#94a3b8" }}>Belum ada data.</div>
+        <div style={{ color: "var(--muted)" }}>Belum ada data.</div>
       )}
     </>
   );
@@ -869,9 +882,9 @@ function DownloadNotice({ message, percent }) {
       style={{
         marginBottom: 8,
         whiteSpace: "pre-line",
-        border: "1px solid #1f2937",
-        background: "#0f1424",
-        color: "#e2e8f0",
+        border: "1px solid var(--border)",
+        background: "var(--panel)",
+        color: "var(--text)",
         borderRadius: 10,
         padding: "10px 12px",
       }}
@@ -883,7 +896,7 @@ function DownloadNotice({ message, percent }) {
           <div
             style={{
               height: 6,
-              background: "#1f2937",
+              background: "var(--border)",
               borderRadius: 4,
               marginTop: 4,
             }}
@@ -892,7 +905,7 @@ function DownloadNotice({ message, percent }) {
               style={{
                 width: `${Math.max(0, Math.min(100, percent))}%`,
                 height: 6,
-                background: "#60a5fa",
+                background: "var(--accent, #60a5fa)",
                 borderRadius: 4,
                 transition: "width .2s linear",
               }}
@@ -908,11 +921,11 @@ function DownloadNotice({ message, percent }) {
 
 function DocTable({ rows, onDelete }) {
   if (!rows?.length)
-    return <div style={{ color: "#94a3b8" }}>Belum ada data.</div>;
+    return <div style={{ color: "var(--muted)" }}>Belum ada data.</div>;
 
   return (
     <div style={{ overflowX: "auto" }}>
-      <table className="table" style={{ width: "100%" }}>
+      <table className="table" style={{ width: "100%", color: "var(--text)" }}>
         <thead>
           <tr>
             <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>Judul</th>
@@ -965,7 +978,10 @@ function DocTable({ rows, onDelete }) {
           ))}
         </tbody>
       </table>
-      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+      <div
+        className="muted"
+        style={{ fontSize: 12, marginTop: 6, color: "var(--muted)" }}
+      >
         Download selalu mengunduh file tanpa menampilkan preview.
       </div>
     </div>
@@ -1186,7 +1202,7 @@ function SectionCard({
             height: 220,
             objectFit: "cover",
             borderRadius: 8,
-            border: "1px solid #1f2937",
+            border: "1px solid var(--border)",
             display: "block",
           }}
           onError={(e) => {
@@ -1202,13 +1218,14 @@ function SectionCard({
             position: "absolute",
             top: 6,
             right: 6,
-            background: "#0b1220",
-            border: "1px solid #1f2937",
+            background: "var(--panel)",
+            border: "1px solid var(--border)",
             padding: "4px 8px",
             borderRadius: 8,
             fontSize: 12,
             cursor: uploading ? "not-allowed" : "pointer",
             opacity: uploading ? 0.6 : 1,
+            color: "var(--text)",
           }}
           title="Edit Foto"
         >
@@ -1232,8 +1249,9 @@ function SectionCard({
     <div
       className="card"
       style={{
-        background: "#0b1220",
-        border: "1px solid #1f2937",
+        background: "var(--panel)",
+        border: "1px solid var(--border)",
+        color: "var(--text)",
         position: "relative",
       }}
     >
@@ -1285,7 +1303,6 @@ function SectionCard({
 
       {/* Body */}
       {isFotoIdentitas ? (
-        // Foto di kanan
         <div
           style={{
             display: "grid",
@@ -1299,7 +1316,7 @@ function SectionCard({
             pointerEvents: isBusy ? "none" : "auto",
           }}
         >
-          {/* Kiri: semua field kecuali foto */}
+          {/* Kiri */}
           <div
             style={{
               display: "grid",
@@ -1330,7 +1347,14 @@ function SectionCard({
                         onChange={(e) =>
                           setForm((f) => ({ ...f, [key]: e.target.value }))
                         }
-                        style={{ width: "100%" }}
+                        style={{
+                          width: "100%",
+                          background: "var(--input-bg)",
+                          color: "var(--text)",
+                          border: "1px solid var(--border)",
+                          borderRadius: 8,
+                          padding: "6px 8px",
+                        }}
                       />
                     </Field>
                   );
@@ -1356,7 +1380,14 @@ function SectionCard({
                         onChange={(e) =>
                           setForm((f) => ({ ...f, [key]: e.target.value }))
                         }
-                        style={{ width: "100%" }}
+                        style={{
+                          width: "100%",
+                          background: "var(--input-bg)",
+                          color: "var(--text)",
+                          border: "1px solid var(--border)",
+                          borderRadius: 8,
+                          padding: "6px 8px",
+                        }}
                       >
                         <option value="">-</option>
                         {options.map((o) => (
@@ -1377,7 +1408,14 @@ function SectionCard({
                       onChange={(e) =>
                         setForm((f) => ({ ...f, [key]: e.target.value }))
                       }
-                      style={{ width: "100%" }}
+                      style={{
+                        width: "100%",
+                        background: "var(--input-bg)",
+                        color: "var(--text)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 8,
+                        padding: "6px 8px",
+                      }}
                       placeholder="-"
                     />
                   </Field>
@@ -1422,7 +1460,14 @@ function SectionCard({
                     onChange={(e) =>
                       setForm((f) => ({ ...f, [key]: e.target.value }))
                     }
-                    style={{ width: "100%" }}
+                    style={{
+                      width: "100%",
+                      background: "var(--input-bg)",
+                      color: "var(--text)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      padding: "6px 8px",
+                    }}
                   />
                 </Field>
               );
@@ -1448,7 +1493,14 @@ function SectionCard({
                     onChange={(e) =>
                       setForm((f) => ({ ...f, [key]: e.target.value }))
                     }
-                    style={{ width: "100%" }}
+                    style={{
+                      width: "100%",
+                      background: "var(--input-bg)",
+                      color: "var(--text)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      padding: "6px 8px",
+                    }}
                   >
                     <option value="">-</option>
                     {options.map((o) => (
@@ -1469,7 +1521,14 @@ function SectionCard({
                   onChange={(e) =>
                     setForm((f) => ({ ...f, [key]: e.target.value }))
                   }
-                  style={{ width: "100%" }}
+                  style={{
+                    width: "100%",
+                    background: "var(--input-bg)",
+                    color: "var(--text)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                    padding: "6px 8px",
+                  }}
                   placeholder="-"
                 />
               </Field>
@@ -1559,7 +1618,6 @@ export default function SiswaDetail({ nik }) {
       setDataMap((m) => ({ ...m, [tabKey]: rows }));
 
       if (tabKey === "mental" || tabKey === "mapel") {
-        // gunakan endpoint rank yang sama agar tampilan konsisten
         try {
           const rank = await fetchMentalRankByNik(safeNik, token);
           setMentalRank(rank);
@@ -1762,7 +1820,7 @@ export default function SiswaDetail({ nik }) {
     if (active === "biodata") {
       if (!safeNik) return <div className="muted">NIK belum tersedia.</div>;
       if (!biodata)
-        return <div style={{ color: "#94a3b8" }}>Memuat biodata...</div>;
+        return <div style={{ color: "var(--muted)" }}>Memuat biodata...</div>;
       return (
         <div style={{ display: "grid", gap: 16 }}>
           {GROUPS.map((g) => (
@@ -1784,7 +1842,7 @@ export default function SiswaDetail({ nik }) {
 
     if (loading) {
       return (
-        <div style={{ color: "#94a3b8" }}>
+        <div style={{ color: "var(--muted)" }}>
           Memuat data {TABS.find((t) => t.key === active)?.label || active}...
         </div>
       );
@@ -1794,12 +1852,10 @@ export default function SiswaDetail({ nik }) {
       return <MentalTable rows={dataMap["mental"] || []} rank={mentalRank} />;
     }
 
-    // Mapel: DISTINCT mapel, header pertemuan dinamis + ranking
     if (active === "mapel") {
       return <MapelTable rows={dataMap["mapel"] || []} rank={mentalRank} />;
     }
 
-    // Jasmani: tetap ala MentalTable (sesuai instruksi sebelumnya)
     if (active === "jasmani") {
       return <JasmaniTable rows={dataMap["jasmani"] || []} rank={mentalRank} />;
     }
@@ -1865,7 +1921,6 @@ export default function SiswaDetail({ nik }) {
       );
     }
 
-    // default untuk tab lain (mis. jasmani_polda → tabel generik)
     return <DataTable rows={dataMap[active] || []} />;
   }
 
@@ -1895,7 +1950,14 @@ export default function SiswaDetail({ nik }) {
 
   return (
     <div className="grid">
-      <div className="card">
+      <div
+        className="card"
+        style={{
+          background: "var(--panel)",
+          border: "1px solid var(--border)",
+          color: "var(--text)",
+        }}
+      >
         <div
           style={{
             display: "flex",
@@ -1906,10 +1968,14 @@ export default function SiswaDetail({ nik }) {
         >
           <div>
             <div style={{ fontWeight: 800, fontSize: 18 }}>Detail Siswa</div>
-            <div style={{ color: "#94a3b8" }}>
-              NOSIS: <code>{biodata?.nosis || "-"}</code>
-              <span style={{ marginLeft: 12, color: "#64748b" }}>
-                (NIK: <code>{safeNik || "-"}</code>)
+            <div style={{ color: "var(--muted)" }}>
+              NOSIS:{" "}
+              <code style={{ color: "var(--text)" }}>
+                {biodata?.nosis || "-"}
+              </code>
+              <span style={{ marginLeft: 12, color: "var(--muted)" }}>
+                (NIK:{" "}
+                <code style={{ color: "var(--text)" }}>{safeNik || "-"}</code>)
               </span>
             </div>
           </div>
@@ -1923,7 +1989,14 @@ export default function SiswaDetail({ nik }) {
         {err && <div style={{ marginTop: 8, color: "#fca5a5" }}>⚠ {err}</div>}
       </div>
 
-      <div className="card">
+      <div
+        className="card"
+        style={{
+          background: "var(--panel)",
+          border: "1px solid var(--border)",
+          color: "var(--text)",
+        }}
+      >
         {/* Banner progres download/export: tampil di semua tab */}
         <DownloadNotice message={dlMsg} percent={dlPct} />
 
@@ -1932,9 +2005,8 @@ export default function SiswaDetail({ nik }) {
             <button
               key={t.key}
               className={`tab ${active === t.key ? "active" : ""}`}
-              onClick={() => onTabClick(t.key)}
             >
-              {t.label}
+              <span onClick={() => onTabClick(t.key)}>{t.label}</span>
             </button>
           ))}
         </div>

@@ -1,9 +1,9 @@
-// src/components/Modal.jsx
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useToast } from "./Toaster";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-// --- Utils kecil: samakan perilaku dengan SiswaDetail ---
+/* ==== Utils ==== */
 function buildDownloadUrl(filePath) {
   if (!filePath) return "#";
   const clean = String(filePath)
@@ -11,32 +11,17 @@ function buildDownloadUrl(filePath) {
     .replace(/^uploads\//i, "");
   return `${API}/download?path=${encodeURIComponent(clean)}`;
 }
-
-async function handleDownloadLikeApp({ url, isRaw = false }) {
-  const targetUrl = isRaw ? url : buildDownloadUrl(url);
-
+async function headExists(url, withAuth = true) {
   try {
-    // HEAD check seperti di SiswaDetail
-    const head = await fetch(targetUrl, { method: "HEAD" });
-    if (!head.ok) {
-      alert("Tidak ada data / file tidak ditemukan.");
-      return;
+    const headers = {};
+    if (withAuth) {
+      const token = await window.authAPI?.getToken?.();
+      if (token) headers.Authorization = `Bearer ${token}`;
     }
-  } catch (e) {
-    alert("Gagal memeriksa file: " + (e?.message || "unknown"));
-    return;
-  }
-
-  // Electron-aware download
-  if (window.electronAPI?.download) {
-    window.electronAPI.download(targetUrl);
-  } else {
-    const a = document.createElement("a");
-    a.href = targetUrl;
-    a.download = "";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    const r = await fetch(url, { method: "HEAD", headers });
+    return r.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -46,32 +31,171 @@ export default function Modal({
   title,
   children,
   width = 880,
-
-  // ✅ Opsi tombol download ala aplikasi desktop:
-  // - pilih salah satu:
-  downloadPath, // string: path di server → akan jadi /download?path=...
-  downloadUrl, // string: URL langsung (public/CDN)
+  // Opsi tombol download:
+  downloadPath, // path di server → /download?path=...
+  downloadUrl, // URL publik
   downloadLabel = "Download template",
 }) {
+  const toast = useToast();
+  const [downloading, setDownloading] = useState(false);
+  const unsubRef = useRef(null);
+
   useEffect(() => {
-    function onKey(e) {
-      if (e.key === "Escape") onClose?.();
-    }
+    const onKey = (e) => e.key === "Escape" && onClose?.();
     if (open) document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  useEffect(() => {
+    // bersihkan listener progress saat unmount
+    return () => {
+      if (typeof unsubRef.current === "function") {
+        try {
+          unsubRef.current();
+        } catch {}
+        unsubRef.current = null;
+      }
+    };
+  }, []);
 
   if (!open) return null;
 
   const showDownload = Boolean(downloadPath || downloadUrl);
 
   async function onDownloadClick() {
-    if (downloadUrl) {
-      // URL langsung (raw)
-      await handleDownloadLikeApp({ url: downloadUrl, isRaw: true });
-    } else if (downloadPath) {
-      // Path ke server → /download?path=...
-      await handleDownloadLikeApp({ url: downloadPath, isRaw: false });
+    if (!showDownload || downloading) return;
+
+    const isRaw = !!downloadUrl;
+    const targetUrl = isRaw ? downloadUrl : buildDownloadUrl(downloadPath);
+
+    const ok = await headExists(targetUrl, !isRaw);
+    if (!ok) {
+      toast.show({
+        type: "error",
+        title: "File tidak ditemukan",
+        message: "Tidak ada data / file tidak tersedia di server.",
+      });
+      return;
+    }
+
+    // Electron (dengan progres)
+    if (window.electronAPI?.download) {
+      setDownloading(true);
+      const tid = toast.show({
+        type: "loading",
+        title: "Mengunduh…",
+        message: "Menginisialisasi unduhan",
+        indeterminate: true,
+        duration: 0,
+      });
+
+      const off = window.electronAPI.onDownloadStatus?.((p) => {
+        if (!p || p.type !== "download") return;
+        if (p.phase === "start") {
+          toast.update(tid, {
+            message: "Unduhan dimulai…",
+            indeterminate: true,
+          });
+        } else if (p.phase === "progress") {
+          if (p.total > 0) {
+            const pct = Math.min(100, Math.round((p.received / p.total) * 100));
+            toast.update(tid, {
+              message: `Mengunduh… ${pct}% (${p.received} / ${p.total} bytes)`,
+              progress: pct / 100,
+              indeterminate: false,
+            });
+          } else {
+            toast.update(tid, { message: `Mengunduh… ${p.received} bytes` });
+          }
+        } else if (p.phase === "error") {
+          toast.update(tid, {
+            type: "error",
+            title: "Gagal mengunduh",
+            message: p.message || "Terjadi kesalahan saat mengunduh.",
+            duration: 6000,
+          });
+          cleanup();
+        } else if (p.phase === "done") {
+          toast.update(tid, {
+            type: "success",
+            title: "Selesai",
+            message: p.path
+              ? `Tersimpan di: ${p.path}`
+              : "Berkas telah diunduh.",
+            progress: 1,
+            duration: 5000,
+          });
+          cleanup();
+        }
+      });
+      unsubRef.current = off;
+
+      try {
+        const res = await window.electronAPI.download(targetUrl);
+        if (!res?.ok) {
+          toast.update(tid, {
+            type: "error",
+            title: "Gagal mengunduh",
+            message: res?.message || "Tidak dapat memulai unduhan.",
+            duration: 6000,
+          });
+          cleanup();
+        } else if (res?.path) {
+          // kalau main tidak mengirim event 'done', tetap tampilkan sukses
+          toast.update(tid, {
+            type: "success",
+            title: "Selesai",
+            message: `Tersimpan di: ${res.path}`,
+            progress: 1,
+            duration: 5000,
+          });
+          cleanup();
+        }
+      } catch (e) {
+        toast.show({
+          type: "error",
+          title: "Gagal mengunduh",
+          message: e?.message || "Terjadi kesalahan.",
+          duration: 6000,
+        });
+        cleanup();
+      }
+      function cleanup() {
+        setDownloading(false);
+        if (typeof unsubRef.current === "function") {
+          try {
+            unsubRef.current();
+          } catch {}
+        }
+        unsubRef.current = null;
+      }
+      return;
+    }
+
+    // Fallback browser
+    setDownloading(true);
+    try {
+      const a = document.createElement("a");
+      a.href = targetUrl;
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast.show({
+        type: "success",
+        title: "Unduhan dimulai",
+        message: "Cek folder Downloads di browser Anda.",
+        duration: 4000,
+      });
+    } catch (e) {
+      toast.show({
+        type: "error",
+        title: "Gagal mengunduh",
+        message: e?.message || "Terjadi kesalahan di browser.",
+        duration: 6000,
+      });
+    } finally {
+      setDownloading(false);
     }
   }
 
@@ -84,7 +208,8 @@ export default function Modal({
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(3,10,24,0.72)",
+        /* gunakan token overlay agar cocok light/dark */
+        background: "var(--overlay, rgba(0,0,0,.55))",
         backdropFilter: "blur(2px)",
         zIndex: 1000,
         display: "grid",
@@ -97,11 +222,11 @@ export default function Modal({
         style={{
           width: "100%",
           maxWidth: width,
-          background: "#0b1220",
-          color: "#e2e8f0",
-          border: "1px solid #1f2937",
+          background: "var(--panel)",
+          color: "var(--text)", // <-- penting agar body jelas
+          border: "1px solid var(--border)",
           borderRadius: 14,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
           display: "grid",
           gridTemplateRows: "56px 1fr",
           maxHeight: "86vh",
@@ -114,8 +239,10 @@ export default function Modal({
             alignItems: "center",
             justifyContent: "space-between",
             padding: "0 14px",
-            borderBottom: "1px solid #1f2937",
+            borderBottom: "1px solid var(--border)",
             gap: 8,
+            background: "var(--panel)", // konsisten dengan tema
+            color: "var(--text)",
           }}
         >
           <div
@@ -135,40 +262,34 @@ export default function Modal({
                 type="button"
                 onClick={onDownloadClick}
                 className="btn"
-                style={{
-                  background: "#0ea5e9",
-                  border: "1px solid #0284c7",
-                  color: "#0b1220",
-                  fontWeight: 700,
-                  padding: "8px 12px",
-                  borderRadius: 10,
-                }}
-                aria-label={downloadLabel}
+                disabled={downloading}
                 title={downloadLabel}
               >
-                ⬇ {downloadLabel}
+                {downloading ? "⬇ Mengunduh…" : `⬇ ${downloadLabel}`}
               </button>
             )}
-
             <button
               className="btn"
               onClick={onClose}
               aria-label="Tutup modal"
-              style={{
-                background: "#111827",
-                border: "1px solid #1f2937",
-                color: "#e5e7eb",
-                fontWeight: 700,
-                padding: "8px 12px",
-                borderRadius: 10,
-              }}
+              title="Tutup"
             >
               ✕
             </button>
           </div>
         </header>
 
-        <div style={{ overflow: "auto", padding: 14 }}>{children}</div>
+        {/* BODY */}
+        <div
+          style={{
+            overflow: "auto",
+            padding: 14,
+            background: "var(--panel-alt)", // sedikit kontras dari header
+            color: "var(--text)", // <-- pastikan teks terang/gelap benar
+          }}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );

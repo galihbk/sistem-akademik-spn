@@ -1,11 +1,18 @@
 // src/pages/Siswa.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useShell } from "../context/ShellContext";
+import { useToast } from "../components/Toaster";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
+// durasi auto-close
+const SUCCESS_CLOSE_MS = 5000;
+const ERROR_CLOSE_MS = 6000;
+
 export default function Siswa() {
   const { angkatan: angkatanFromShell } = useShell();
+  const toast = useToast();
+
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState("");
@@ -18,40 +25,26 @@ export default function Siswa() {
   const [angkatanOpts, setAngkatanOpts] = useState([]);
   const [angkatanFilter, setAngkatanFilter] = useState("");
 
-  // status export/download
-  const [dlMsg, setDlMsg] = useState("");
-
-  // dengarkan notifikasi dari proses utama (Electron)
-  useEffect(() => {
-    const off = window.electronAPI?.onDownloadStatus?.((p) => {
-      if (!p || p.type !== "download") return;
-      if (p.phase === "start") {
-        setDlMsg("Menyiapkan file untuk diunduh…");
-      } else if (p.phase === "progress") {
-        const pct = p.total
-          ? Math.min(100, Math.round((p.received / p.total) * 100))
-          : null;
-        setDlMsg(
-          pct != null
-            ? `Mengunduh… ${pct}% (${p.received} / ${p.total} bytes)`
-            : `Mengunduh… ${p.received} bytes`
-        );
-      } else if (p.phase === "done") {
-        setDlMsg(`✔️ Selesai. Tersimpan di: ${p.path}`);
-        clearMsgLater();
-      } else if (p.phase === "error") {
-        setDlMsg(`Gagal mengunduh: ${p.message}`);
-        clearMsgLater();
-      }
-    });
-    return () => off && off();
-  }, []);
-
-  function clearMsgLater(ms = 7000) {
-    window.clearTimeout(clearMsgLater._t);
-    clearMsgLater._t = window.setTimeout(() => setDlMsg(""), ms);
+  // =================== helpers ===================
+  function formatBytes(b) {
+    if (!b) return "0 B";
+    const u = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(b) / Math.log(1024));
+    return `${(b / Math.pow(1024, i)).toFixed(1)} ${u[i]}`;
+  }
+  function triggerDownloadBlob(blob, filename) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 0);
   }
 
+  // =================== data & filters ===================
   // load opsi angkatan 1x
   useEffect(() => {
     let alive = true;
@@ -128,7 +121,102 @@ export default function Siswa() {
     return u.toString();
   }
 
+  // Fallback WEB (non-Electron) — streaming fetch dengan progress & toast
+  async function downloadViaFetchWithProgress(url, suggestedName) {
+    let tid = null;
+    try {
+      const token = await window.authAPI?.getToken?.();
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        let text = "";
+        try {
+          text = await res.text();
+        } catch {}
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+
+      const contentLength = Number(res.headers.get("content-length") || 0);
+      tid = toast.show({
+        type: "loading",
+        title: "Mengunduh file…",
+        message: contentLength
+          ? "Menghitung progres unduhan"
+          : "Ukuran tidak diketahui",
+        progress: contentLength ? 0 : null,
+        indeterminate: !contentLength,
+        canDismiss: true,
+        duration: 0,
+      });
+
+      const reader = res.body?.getReader?.();
+      if (!reader) {
+        const blob = await res.blob();
+        triggerDownloadBlob(blob, suggestedName);
+        toast.update(tid, {
+          type: "success",
+          title: "Selesai",
+          message: `File tersimpan (${suggestedName}).`,
+          progress: 100,
+          indeterminate: false,
+          duration: SUCCESS_CLOSE_MS,
+        });
+        return;
+      }
+
+      let loaded = 0;
+      const chunks = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.byteLength;
+        if (contentLength) {
+          const pct = (loaded / contentLength) * 100;
+          toast.update(tid, {
+            message: `Mengunduh ${formatBytes(loaded)} / ${formatBytes(
+              contentLength
+            )}`,
+            progress: pct,
+            indeterminate: false,
+          });
+        }
+      }
+
+      const blob = new Blob(chunks);
+      triggerDownloadBlob(blob, suggestedName);
+      toast.update(tid, {
+        type: "success",
+        title: "Unduhan selesai",
+        message: `File: ${suggestedName}`,
+        progress: 100,
+        indeterminate: false,
+        duration: SUCCESS_CLOSE_MS,
+      });
+    } catch (e) {
+      if (tid) {
+        toast.update(tid, {
+          type: "error",
+          title: "Gagal unduh",
+          message: e?.message || "Terjadi kesalahan saat mengunduh.",
+          indeterminate: false,
+          duration: ERROR_CLOSE_MS,
+        });
+      } else {
+        toast.show({
+          type: "error",
+          title: "Gagal unduh",
+          message: e?.message || "Terjadi kesalahan saat mengunduh.",
+          duration: ERROR_CLOSE_MS,
+        });
+      }
+      throw e;
+    }
+  }
+
   async function exportExcelAll() {
+    let tid = null;
     try {
       const url = buildExportUrl();
       const ts = new Date();
@@ -138,47 +226,63 @@ export default function Siswa() {
       const hh = String(ts.getHours()).padStart(2, "0");
       const mm = String(ts.getMinutes()).padStart(2, "0");
       const ss = String(ts.getSeconds()).padStart(2, "0");
-      const labelAngkatan = angkatanEffective ? `-angkatan-${angkatanEffective}` : "";
+      const labelAngkatan = angkatanEffective
+        ? `-angkatan-${angkatanEffective}`
+        : "";
       const fname = `siswa${labelAngkatan}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
 
-      setDlMsg("Menyiapkan file untuk diunduh…");
-
       if (window.electronAPI?.download) {
-        // Mode Electron
-        const res = await window.electronAPI.download(url, fname);
-        if (res?.ok && res.path) {
-          setDlMsg(`✔️ Selesai. Tersimpan di: ${res.path}`);
-          clearMsgLater();
-        } else if (!res?.ok) {
-          setDlMsg(`Gagal mengunduh: ${res?.message || "unknown error"}`);
-          clearMsgLater();
-        }
-      } else {
-        // Mode browser dev (fallback)
-        const token = await window.authAPI?.getToken?.();
-        const r = await fetch(url, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        // Electron: tampilkan info lokasi default
+        const info = await window.electronAPI
+          .getDefaultDownloadsDir?.()
+          .catch(() => null);
+        tid = toast.show({
+          type: "loading",
+          title: "Menyiapkan unduhan…",
+          message: info?.dir
+            ? `Menyimpan ke: ${info.dir}`
+            : "Menyimpan berkas…",
+          indeterminate: true,
+          canDismiss: true,
+          duration: 0,
         });
-        if (!r.ok) throw new Error(await r.text().catch(() => `HTTP ${r.status}`));
-        const blob = await r.blob();
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = fname;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-          URL.revokeObjectURL(a.href);
-          a.remove();
-        }, 0);
-        setDlMsg("✔️ Selesai. Cek folder unduhan (Downloads) di browser Anda.");
-        clearMsgLater();
+
+        const res = await window.electronAPI.download(url, fname);
+        if (!res?.ok) throw new Error(res?.message || "Gagal mengunduh");
+        const fullPath = res.path;
+
+        toast.update(tid, {
+          type: "success",
+          title: "Selesai",
+          message: `Tersimpan: ${fullPath}`,
+          indeterminate: false,
+          duration: SUCCESS_CLOSE_MS, // auto-close
+        });
+      } else {
+        // Dev/browser fallback
+        await downloadViaFetchWithProgress(url, fname);
       }
     } catch (e) {
-      setDlMsg(`Gagal export: ${e.message}`);
-      clearMsgLater();
+      if (tid) {
+        toast.update(tid, {
+          type: "error",
+          title: "Gagal export",
+          message: e?.message || "Terjadi kesalahan saat mengunduh.",
+          indeterminate: false,
+          duration: ERROR_CLOSE_MS,
+        });
+      } else {
+        toast.show({
+          type: "error",
+          title: "Gagal export",
+          message: e?.message || "Terjadi kesalahan saat mengunduh.",
+          duration: ERROR_CLOSE_MS,
+        });
+      }
     }
   }
 
+  // =================== UI ===================
   return (
     <>
       {/* Toolbar */}
@@ -193,7 +297,9 @@ export default function Siswa() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label htmlFor="angkatan" className="muted">Angkatan</label>
+          <label htmlFor="angkatan" className="muted">
+            Angkatan
+          </label>
           <select
             id="angkatan"
             value={angkatanFilter}
@@ -209,18 +315,23 @@ export default function Siswa() {
           >
             <option value="">Semua</option>
             {angkatanOpts.map((opt) => (
-              <option key={opt} value={opt}>{opt}</option>
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
             ))}
           </select>
         </div>
 
         <input
           value={q}
-          onChange={(e) => { setQ(e.target.value); setPage(1); }}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setPage(1);
+          }}
           placeholder="Cari nama / nosis ..."
           style={{
             background: "#0f1424",
-            border: "1px solid #1f2937",   // <- fixed here
+            border: "1px solid #1f2937",
             color: "#e5e7eb",
             borderRadius: 8,
             padding: "8px 10px",
@@ -264,18 +375,15 @@ export default function Siswa() {
 
         {/* Tombol Export */}
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn" onClick={exportExcelAll} title="Export Excel (semua hasil filter)">
+          <button
+            className="btn"
+            onClick={exportExcelAll}
+            title="Export Excel (semua hasil filter)"
+          >
             Export Excel
           </button>
         </div>
       </div>
-
-      {/* Info unduh */}
-      {dlMsg && (
-        <div className="card" style={{ color: dlMsg.startsWith("✔") ? "#86efac" : "#cbd5e1" }}>
-          {dlMsg}
-        </div>
-      )}
 
       {/* Tabel */}
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -311,7 +419,9 @@ export default function Siswa() {
                         <button
                           className="btn"
                           onClick={() =>
-                            (window.location.hash = `#/siswa/nik/${encodeURIComponent(nik)}`)
+                            (window.location.hash = `#/siswa/nik/${encodeURIComponent(
+                              nik
+                            )}`)
                           }
                         >
                           Detail
@@ -329,7 +439,9 @@ export default function Siswa() {
       </div>
 
       {/* Pagination */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+      <div
+        style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}
+      >
         <button
           className="btn"
           onClick={() => setPage((p) => Math.max(1, p - 1))}

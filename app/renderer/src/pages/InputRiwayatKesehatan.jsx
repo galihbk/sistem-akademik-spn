@@ -1,12 +1,15 @@
 // src/pages/InputRiwayatKesehatan.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useToast } from "../components/Toaster";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 /* ===== Utils ===== */
 function buildDownloadUrl(filePath) {
   if (!filePath) return "#";
-  const clean = String(filePath).replace(/^\/+/, "").replace(/^uploads\//i, "");
+  const clean = String(filePath)
+    .replace(/^\/+/, "")
+    .replace(/^uploads\//i, "");
   return `${API}/download?path=${encodeURIComponent(clean)}`;
 }
 async function headOK(url) {
@@ -58,10 +61,11 @@ function Modal({ open, onClose, title, children }) {
           width: "min(960px,96vw)",
           maxHeight: "86vh",
           overflow: "auto",
-          background: "#0b1220",
-          border: "1px solid #1f2937",
+          background: "var(--panel)",
+          border: "1px solid var(--border)",
           borderRadius: 14,
           padding: 14,
+          color: "var(--text)",
         }}
       >
         <div
@@ -86,6 +90,8 @@ function Modal({ open, onClose, title, children }) {
 
 /* ===== Page ===== */
 export default function InputRiwayatKesehatan() {
+  const toast = useToast();
+
   /* ---------- History List ---------- */
   const [list, setList] = useState([]);
   const [total, setTotal] = useState(0);
@@ -93,7 +99,6 @@ export default function InputRiwayatKesehatan() {
   const [page, setPage] = useState(1);
   const limit = 20;
   const [loadingList, setLoadingList] = useState(false);
-  const [alert, setAlert] = useState({ type: "", text: "" }); // success | danger
 
   const listUrl = useMemo(() => {
     const u = new URL(`${API}/riwayat_kesehatan`);
@@ -121,6 +126,11 @@ export default function InputRiwayatKesehatan() {
         if (!alive) return;
         setList([]);
         setTotal(0);
+        toast.show({
+          type: "error",
+          title: "Gagal",
+          message: "Gagal memuat daftar riwayat.",
+        });
       } finally {
         if (!alive) return;
         setLoadingList(false);
@@ -129,7 +139,7 @@ export default function InputRiwayatKesehatan() {
     return () => {
       alive = false;
     };
-  }, [listUrl]);
+  }, [listUrl, toast]);
 
   /* ---------- Modal Form ---------- */
   const [open, setOpen] = useState(false);
@@ -205,7 +215,7 @@ export default function InputRiwayatKesehatan() {
     };
   }, [q, siswaId]);
 
-  // close dropdown on outside click / blur / Esc
+  // close dropdown on outside click / Esc
   useEffect(() => {
     function onDocClick(e) {
       const inInput = inputRef.current?.contains?.(e.target);
@@ -248,28 +258,35 @@ export default function InputRiwayatKesehatan() {
     if (el) el.value = "";
   }
 
-  // ⬇⬇ helper untuk menutup modal & merapikan state
   function closeModalAndReset() {
     setOpen(false);
     setOpenList(false);
     resetForm();
   }
 
+  /* ---------- Submit (pakai toaster) ---------- */
   async function submit() {
-    setAlert({ type: "", text: "" });
-
     if (!siswaId || !judul.trim() || !deskripsi.trim()) {
-      setAlert({
-        type: "danger",
-        text: "Lengkapi siswa, Judul, dan Deskripsi.",
+      toast.show({
+        type: "error",
+        title: "Validasi",
+        message: "Lengkapi siswa, Judul, dan Deskripsi.",
       });
-      // gagal validasi → juga tutup modal (sesuai permintaan)
       closeModalAndReset();
       return;
     }
 
+    let tId;
     try {
       setSaving(true);
+      tId = toast.show({
+        type: "loading",
+        title: "Menyimpan riwayat…",
+        indeterminate: true,
+        canDismiss: true,
+        duration: 0,
+      });
+
       const token = await window.authAPI?.getToken?.();
 
       const form = new FormData();
@@ -287,16 +304,115 @@ export default function InputRiwayatKesehatan() {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.message || "Gagal menyimpan data.");
 
-      setAlert({ type: "success", text: "Berhasil disimpan." });
-      setPage(1); // refresh list dari halaman 1
-      closeModalAndReset(); // ⬅ AUTOCLOSE saat sukses
+      toast.update(tId, {
+        type: "success",
+        title: "Berhasil",
+        message: "Riwayat disimpan.",
+        duration: 2500,
+        indeterminate: false,
+      });
+
+      setPage(1);
+      closeModalAndReset();
     } catch (e) {
-      setAlert({ type: "danger", text: `Gagal: ${e.message}` });
-      closeModalAndReset(); // ⬅ AUTOCLOSE saat error
+      toast.update(tId, {
+        type: "error",
+        title: "Gagal",
+        message: e?.message || "Terjadi kesalahan.",
+        duration: 5000,
+        indeterminate: false,
+      });
     } finally {
       setSaving(false);
     }
   }
+
+  const dlToastIdRef = useRef(null);
+
+  useEffect(() => {
+    const off = window.electronAPI?.onDownloadStatus?.((p) => {
+      if (!p || p.type !== "download") return;
+
+      if (p.phase === "progress") {
+        const pct = p.total
+          ? Math.min(100, Math.round((p.received / p.total) * 100))
+          : null;
+
+        if (!dlToastIdRef.current) {
+          dlToastIdRef.current = toast.show({
+            type: "loading",
+            title: "Mengunduh file…",
+            message:
+              pct != null
+                ? `Mengunduh… ${pct}% (${p.received} / ${p.total} bytes)`
+                : `Mengunduh… ${p.received} bytes`,
+            progress: pct ?? null,
+            indeterminate: pct == null,
+            canDismiss: true,
+            duration: 0,
+          });
+        } else {
+          toast.update(dlToastIdRef.current, {
+            type: "loading",
+            title: "Mengunduh file…",
+            message:
+              pct != null
+                ? `Mengunduh… ${pct}% (${p.received} / ${p.total} bytes)`
+                : `Mengunduh… ${p.received} bytes`,
+            progress: pct ?? null,
+            indeterminate: pct == null,
+            duration: 0,
+          });
+        }
+        return;
+      }
+
+      // DONE / ERROR: jika belum ada toast progress (file kecil), tampilkan satu toast final saja
+      if (p.phase === "done") {
+        if (!dlToastIdRef.current) {
+          toast.show({
+            type: "success",
+            title: "Selesai",
+            message: `Tersimpan di: ${p.path}`,
+            duration: 6000,
+          });
+        } else {
+          toast.update(dlToastIdRef.current, {
+            type: "success",
+            title: "Selesai",
+            message: `Tersimpan di: ${p.path}`,
+            duration: 6000,
+            progress: 100,
+            indeterminate: false,
+          });
+          dlToastIdRef.current = null;
+        }
+      } else if (p.phase === "error") {
+        const msg = p.message || "Gagal mengunduh.";
+        if (!dlToastIdRef.current) {
+          toast.show({
+            type: "error",
+            title: "Gagal",
+            message: msg,
+            duration: 7000,
+          });
+        } else {
+          toast.update(dlToastIdRef.current, {
+            type: "error",
+            title: "Gagal",
+            message: msg,
+            duration: 7000,
+            indeterminate: false,
+          });
+          dlToastIdRef.current = null;
+        }
+      }
+    });
+
+    return () => {
+      off && off();
+    };
+  }, [toast]);
 
   /* ---------- UI ---------- */
   return (
@@ -304,7 +420,11 @@ export default function InputRiwayatKesehatan() {
       {/* Header + open modal */}
       <div
         className="card"
-        style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
       >
         <div>
           <div style={{ fontWeight: 800, fontSize: 18 }}>Riwayat Kesehatan</div>
@@ -315,24 +435,11 @@ export default function InputRiwayatKesehatan() {
         </button>
       </div>
 
-      {/* Alerts di atas tabel */}
-      {alert.text && (
-        <div
-          className="card"
-          style={{
-            border: `1px solid ${alert.type === "success" ? "#166534" : "#7f1d1d"}`,
-            background: alert.type === "success" ? "#052e1a" : "#1b0c0c",
-            color: alert.type === "success" ? "#86efac" : "#fca5a5",
-            padding: "8px 12px",
-            borderRadius: 12,
-          }}
-        >
-          {alert.text}
-        </div>
-      )}
-
       {/* Toolbar list */}
-      <div className="card" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div
+        className="card"
+        style={{ display: "flex", gap: 8, alignItems: "center" }}
+      >
         <input
           className="input"
           placeholder="Cari judul / nama / nosis …"
@@ -343,14 +450,26 @@ export default function InputRiwayatKesehatan() {
           }}
           style={{ minWidth: 280 }}
         />
-        <div style={{ marginLeft: "auto", color: "#94a3b8" }}>Total: {total}</div>
+        <div style={{ marginLeft: "auto", color: "var(--muted)" }}>
+          Total: {total}
+        </div>
       </div>
 
       {/* Tabel history */}
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <div className="table-wrap" style={{ maxHeight: "60vh", overflow: "auto" }}>
+        <div
+          className="table-wrap"
+          style={{ maxHeight: "60vh", overflow: "auto" }}
+        >
           <table className="table" style={{ width: "100%" }}>
-            <thead style={{ position: "sticky", top: 0, background: "#0b1220", zIndex: 1 }}>
+            <thead
+              style={{
+                position: "sticky",
+                top: 0,
+                background: "var(--panel)",
+                zIndex: 1,
+              }}
+            >
               <tr>
                 <th style={{ textAlign: "left" }}>NOSIS</th>
                 <th style={{ textAlign: "left" }}>Nama</th>
@@ -379,7 +498,9 @@ export default function InputRiwayatKesehatan() {
                     <td style={{ whiteSpace: "nowrap" }}>{r.nosis ?? "-"}</td>
                     <td style={{ whiteSpace: "nowrap" }}>{r.nama ?? "-"}</td>
                     <td>{r.judul ?? "-"}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>{fmtDate(r.tanggal)}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {fmtDate(r.tanggal)}
+                    </td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       {r.file_path ? (
                         <button
@@ -387,19 +508,35 @@ export default function InputRiwayatKesehatan() {
                           style={{ padding: "6px 10px" }}
                           onClick={async () => {
                             const url = buildDownloadUrl(r.file_path);
+
+                            // cek file ada
                             if (!(await headOK(url))) {
-                              setAlert({ type: "danger", text: "File tidak ditemukan." });
+                              toast.show({
+                                type: "error",
+                                title: "Gagal",
+                                message: "File tidak ditemukan.",
+                                duration: 5000,
+                              });
                               return;
                             }
+
+                            // mulai unduh via Electron (tanpa membuat toast awal)
                             if (window.electronAPI?.download) {
                               window.electronAPI.download(url);
                             } else {
+                              // fallback browser
                               const a = document.createElement("a");
                               a.href = url;
                               a.download = "";
                               document.body.appendChild(a);
                               a.click();
                               a.remove();
+                              toast.show({
+                                type: "success",
+                                title: "Unduhan dimulai",
+                                message: "Unduhan berjalan via browser.",
+                                duration: 4000,
+                              });
                             }
                           }}
                         >
@@ -409,7 +546,9 @@ export default function InputRiwayatKesehatan() {
                         "-"
                       )}
                     </td>
-                    <td style={{ whiteSpace: "nowrap" }}>{fmtDate(r.created_at)}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {fmtDate(r.created_at)}
+                    </td>
                   </tr>
                 ))
               )}
@@ -420,7 +559,11 @@ export default function InputRiwayatKesehatan() {
 
       {/* Pagination */}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <button className="btn" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+        <button
+          className="btn"
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page <= 1}
+        >
           Prev
         </button>
         <span className="badge">Page {page}</span>
@@ -464,7 +607,7 @@ export default function InputRiwayatKesehatan() {
               autoComplete="off"
             />
 
-            {/* Dropdown – muncul hanya saat belum memilih siswa */}
+            {/* Dropdown */}
             {openList && !siswaId && (
               <div
                 ref={listRef}
@@ -474,30 +617,31 @@ export default function InputRiwayatKesehatan() {
                   left: 0,
                   right: 0,
                   marginTop: 6,
-                  background: "#1e293b",
-                  border: "1px solid #475569",
+                  background: "var(--panel)",
+                  border: "1px solid var(--border)",
                   borderRadius: 10,
                   boxShadow: "0 10px 20px rgba(0,0,0,.35)",
                   maxHeight: 280,
                   overflow: "auto",
-                  color: "#e2e8f0",
+                  color: "var(--text)",
                 }}
               >
                 <div
                   className="muted"
                   style={{
                     padding: "8px 10px",
-                    borderBottom: "1px solid #334155",
-                    color: "#cbd5e1",
-                    background: "#243447",
+                    borderBottom: "1px solid var(--border)",
+                    background: "var(--panel-alt)",
                   }}
                 >
                   {searching ? "Mencari..." : "Pilih dari daftar:"}
                 </div>
 
                 {filteredSug.length === 0 ? (
-                  <div className="muted" style={{ padding: 10, color: "#cbd5e1" }}>
-                    {q.length < 2 ? "Ketik minimal 2 karakter." : "Tidak ada hasil."}
+                  <div className="muted" style={{ padding: 10 }}>
+                    {q.length < 2
+                      ? "Ketik minimal 2 karakter."
+                      : "Tidak ada hasil."}
                   </div>
                 ) : (
                   filteredSug.map((s) => (
@@ -510,19 +654,24 @@ export default function InputRiwayatKesehatan() {
                         width: "100%",
                         textAlign: "left",
                         padding: "10px 12px",
-                        background: "#1f2a3a",
+                        background: "transparent",
                         border: 0,
-                        borderBottom: "1px solid #334155",
+                        borderBottom: "1px solid var(--border)",
                         cursor: "pointer",
-                        color: "#e5e7eb",
+                        color: "var(--text)",
                       }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "#2b3a55")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "#1f2a3a")}
+                      onMouseEnter={(e) =>
+                        (e.currentTarget.style.background =
+                          "var(--table-row-hover)")
+                      }
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.background = "transparent")
+                      }
                     >
                       <div style={{ fontWeight: 700 }}>
                         {String(s.nosis || "-").padStart(4, "0")} — {s.nama}
                       </div>
-                      <div className="muted" style={{ fontSize: 12, color: "#cbd5e1" }}>
+                      <div className="muted" style={{ fontSize: 12 }}>
                         {s.nik ? `NIK ${s.nik}` : "NIK -"}
                       </div>
                     </button>

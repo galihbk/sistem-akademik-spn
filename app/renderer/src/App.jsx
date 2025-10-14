@@ -21,19 +21,57 @@ import ImportJasmaniPolda from "./pages/ImportJasmaniPolda";
 
 import Settings from "./pages/Settings";
 
+/* === Brand komponen kecil untuk header login === */
+function BrandBSMS() {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <img
+        src="/bsms-logo.png"
+        alt="Logo BSMS"
+        width={44}
+        height={44}
+        style={{ objectFit: "contain", borderRadius: 8 }}
+        onError={(e) => (e.currentTarget.style.display = "none")}
+      />
+      <div style={{ lineHeight: 1.15 }}>
+        <div style={{ fontWeight: 900, fontSize: 20, letterSpacing: 0.4 }}>
+          BSMS SPN Purwokerto
+        </div>
+        <div style={{ fontSize: 13, opacity: 0.9, color: "#475569" }}>
+          Bhayangkara Student Management System
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Login({ onSuccess }) {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
+  const [jenis, setJenis] = useState(
+    () => localStorage.getItem("sa.jenis_pendidikan") || ""
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const onSubmit = async (e) => {
     e.preventDefault();
     setError("");
+
+    // wajib pilih jenis pendidikan
+    if (!jenis) {
+      setError("Silakan pilih Jenis Pendidikan terlebih dahulu.");
+      return;
+    }
+
     setLoading(true);
     try {
       const data = await login(username.trim(), password);
       await window.authAPI.setToken(data.token);
+
+      // simpan pilihan jenis pendidikan (lokal)
+      localStorage.setItem("sa.jenis_pendidikan", jenis);
+
       onSuccess();
     } catch (err) {
       setError(err.message || "Login gagal");
@@ -56,14 +94,9 @@ function Login({ onSuccess }) {
         className="card"
         style={{ width: 440, background: "#fff", color: "#0b1220" }}
       >
-        <h1 style={{ marginBottom: 8, lineHeight: 1.2 }}>
-          SISTEM AKADEMIK
-          <br />
-          Admin Login
-        </h1>
-        <p style={{ marginTop: 0, color: "#475569" }}>
-          Masuk sebagai Admin untuk melanjutkan.
-        </p>
+        {/* === Brand + subjudul (ganti judul lama) === */}
+        <BrandBSMS />
+        <hr />
         <label style={{ display: "block", marginTop: 12 }}>Username</label>
         <input
           className="input"
@@ -72,6 +105,7 @@ function Login({ onSuccess }) {
           required
           placeholder="admin"
         />
+
         <label style={{ display: "block", marginTop: 12 }}>Password</label>
         <input
           className="input"
@@ -81,6 +115,23 @@ function Login({ onSuccess }) {
           required
           placeholder="••••••••"
         />
+
+        {/* === Jenis Pendidikan (baru) === */}
+        <label style={{ display: "block", marginTop: 12 }}>
+          Jenis Pendidikan
+        </label>
+        <select
+          className="input"
+          value={jenis}
+          onChange={(e) => setJenis(e.target.value)}
+          required
+        >
+          <option value="">— Pilih —</option>
+          <option value="Diktuk">Diktuk</option>
+          <option value="Dikbangspes">Dikbangspes</option>
+          <option value="Prolat">Prolat</option>
+        </select>
+
         {error && (
           <div style={{ marginTop: 12, color: "#dc2626" }}>{error}</div>
         )}

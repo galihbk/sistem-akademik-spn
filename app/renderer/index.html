@@ -1,11 +1,19 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SISTEM AKADEMIK</title>
+    <title>BSMS SPN Purwokerto</title>
+    <script>
+      try {
+        const t = localStorage.getItem("sa.theme") || "dark";
+        document.documentElement.setAttribute("data-theme", t);
+        document.body?.classList?.toggle("theme-dark", t === "dark");
+        document.body?.classList?.toggle("theme-light", t === "light");
+      } catch {}
+    </script>
   </head>
-  <body style="margin: 0px;">
+  <body style="margin: 0px">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
