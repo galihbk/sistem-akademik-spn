@@ -62,7 +62,7 @@ function Modal({ open, onClose, title, children }) {
           maxHeight: "86vh",
           overflow: "auto",
           background: "var(--panel)",
-          border: "1px solid var(--border)",
+          border: "1px solid " + "var(--border)",
           borderRadius: 14,
           padding: 14,
           color: "var(--text)",
@@ -99,6 +99,7 @@ export default function InputRiwayatKesehatan() {
   const [page, setPage] = useState(1);
   const limit = 20;
   const [loadingList, setLoadingList] = useState(false);
+  const [reload, setReload] = useState(0); // <— trigger refetch
 
   const listUrl = useMemo(() => {
     const u = new URL(`${API}/riwayat_kesehatan`);
@@ -139,7 +140,7 @@ export default function InputRiwayatKesehatan() {
     return () => {
       alive = false;
     };
-  }, [listUrl, toast]);
+  }, [listUrl, reload, toast]); // <— depend on reload
 
   /* ---------- Modal Form ---------- */
   const [open, setOpen] = useState(false);
@@ -243,7 +244,7 @@ export default function InputRiwayatKesehatan() {
 
   function pickSiswa(s) {
     setSiswaId(s.id);
-    setQuery(`${String(s.nosis || "").padStart(4, "0")} — ${s.nama}`);
+    setQuery(`${s.nosis} — ${s.nama}`);
     setOpenList(false);
   }
 
@@ -258,13 +259,7 @@ export default function InputRiwayatKesehatan() {
     if (el) el.value = "";
   }
 
-  function closeModalAndReset() {
-    setOpen(false);
-    setOpenList(false);
-    resetForm();
-  }
-
-  /* ---------- Submit (pakai toaster) ---------- */
+  /* ---------- Submit ---------- */
   async function submit() {
     if (!siswaId || !judul.trim() || !deskripsi.trim()) {
       toast.show({
@@ -272,7 +267,6 @@ export default function InputRiwayatKesehatan() {
         title: "Validasi",
         message: "Lengkapi siswa, Judul, dan Deskripsi.",
       });
-      closeModalAndReset();
       return;
     }
 
@@ -308,12 +302,20 @@ export default function InputRiwayatKesehatan() {
         type: "success",
         title: "Berhasil",
         message: "Riwayat disimpan.",
-        duration: 2500,
+        duration: 2000,
         indeterminate: false,
       });
 
+      // refresh list
+      setReload((n) => n + 1);
       setPage(1);
-      closeModalAndReset();
+
+      // reset & tutup modal
+      resetForm();
+      setTimeout(() => {
+        setOpen(false);
+        setOpenList(false);
+      }, 250);
     } catch (e) {
       toast.update(tId, {
         type: "error",
@@ -327,8 +329,50 @@ export default function InputRiwayatKesehatan() {
     }
   }
 
-  const dlToastIdRef = useRef(null);
+  // HAPUS
+  async function handleDelete(row) {
+    if (!row?.id) return;
+    const ok = confirm(
+      `Hapus riwayat "${row.judul || "-"}" untuk ${row.nama || "-"}?`
+    );
+    if (!ok) return;
 
+    let tId;
+    try {
+      tId = toast.show({
+        type: "loading",
+        title: "Menghapus…",
+        indeterminate: true,
+        duration: 0,
+      });
+      const token = await window.authAPI?.getToken?.();
+      const r = await fetch(`${API}/riwayat_kesehatan/${row.id}`, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`);
+
+      toast.update(tId, {
+        type: "success",
+        title: "Terhapus",
+        message: "Data berhasil dihapus.",
+        duration: 2000,
+        indeterminate: false,
+      });
+      setReload((n) => n + 1); // refresh list
+    } catch (e) {
+      toast.update(tId, {
+        type: "error",
+        title: "Gagal",
+        message: e?.message || "Tidak dapat menghapus.",
+        duration: 5000,
+        indeterminate: false,
+      });
+    }
+  }
+
+  const dlToastIdRef = useRef(null);
   useEffect(() => {
     const off = window.electronAPI?.onDownloadStatus?.((p) => {
       if (!p || p.type !== "download") return;
@@ -367,7 +411,6 @@ export default function InputRiwayatKesehatan() {
         return;
       }
 
-      // DONE / ERROR: jika belum ada toast progress (file kecil), tampilkan satu toast final saja
       if (p.phase === "done") {
         if (!dlToastIdRef.current) {
           toast.show({
@@ -477,18 +520,19 @@ export default function InputRiwayatKesehatan() {
                 <th style={{ textAlign: "left" }}>Tanggal</th>
                 <th style={{ textAlign: "left" }}>File</th>
                 <th style={{ textAlign: "left" }}>Dibuat</th>
+                <th style={{ textAlign: "left" }}>Aksi</th>
               </tr>
             </thead>
             <tbody>
               {loadingList ? (
                 <tr>
-                  <td colSpan={6} className="muted" style={{ padding: 12 }}>
+                  <td colSpan={7} className="muted" style={{ padding: 12 }}>
                     Memuat…
                   </td>
                 </tr>
               ) : list.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="muted" style={{ padding: 12 }}>
+                  <td colSpan={7} className="muted" style={{ padding: 12 }}>
                     Tidak ada data.
                   </td>
                 </tr>
@@ -508,8 +552,6 @@ export default function InputRiwayatKesehatan() {
                           style={{ padding: "6px 10px" }}
                           onClick={async () => {
                             const url = buildDownloadUrl(r.file_path);
-
-                            // cek file ada
                             if (!(await headOK(url))) {
                               toast.show({
                                 type: "error",
@@ -519,12 +561,9 @@ export default function InputRiwayatKesehatan() {
                               });
                               return;
                             }
-
-                            // mulai unduh via Electron (tanpa membuat toast awal)
                             if (window.electronAPI?.download) {
                               window.electronAPI.download(url);
                             } else {
-                              // fallback browser
                               const a = document.createElement("a");
                               a.href = url;
                               a.download = "";
@@ -548,6 +587,22 @@ export default function InputRiwayatKesehatan() {
                     </td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       {fmtDate(r.created_at)}
+                    </td>
+                    <td
+                      style={{ whiteSpace: "nowrap", display: "flex", gap: 8 }}
+                    >
+                      <button
+                        className="btn"
+                        style={{
+                          background: "#1b0c0c",
+                          border: "1px solid #7f1d1d",
+                          color: "#fca5a5",
+                          padding: "6px 10px",
+                        }}
+                        onClick={() => handleDelete(r)}
+                      >
+                        Hapus
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -669,7 +724,7 @@ export default function InputRiwayatKesehatan() {
                       }
                     >
                       <div style={{ fontWeight: 700 }}>
-                        {String(s.nosis || "-").padStart(4, "0")} — {s.nama}
+                        {s.nosis ?? "-"} — {s.nama || "-"}
                       </div>
                       <div className="muted" style={{ fontSize: 12 }}>
                         {s.nik ? `NIK ${s.nik}` : "NIK -"}

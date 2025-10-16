@@ -55,7 +55,7 @@ export default function RekapJasmaniPolda() {
     };
   }, []);
 
-  // load opsi siswa (try beberapa endpoint umum; pakai yang ada di servermu)
+  // load opsi siswa
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -63,7 +63,6 @@ export default function RekapJasmaniPolda() {
         setLoadingSiswa(true);
         const token = await window.authAPI?.getToken?.();
 
-        // 1) coba endpoint referensi minimal
         let r = await fetch(`${API}/ref/siswa-min`, {
           headers: {
             Accept: "application/json",
@@ -71,7 +70,6 @@ export default function RekapJasmaniPolda() {
           },
         });
 
-        // 2) fallback ke endpoint alternatif
         if (!r.ok) {
           r = await fetch(`${API}/siswa?min=1&limit=5000`, {
             headers: {
@@ -88,7 +86,6 @@ export default function RekapJasmaniPolda() {
           ? data
           : [];
 
-        // Normalisasi: {id, nosis, nama}
         const norm = arr
           .map((it) => ({
             id: it.id,
@@ -153,13 +150,12 @@ export default function RekapJasmaniPolda() {
   }, [q, angkatanFilter, angkatanFromShell, sortBy, sortDir]);
 
   // styles
-  // ==== helpers (sticky) – GANTI SEMUA WARNA KE VAR() ====
   const stickyLeftTH = (px) => ({
     position: "sticky",
     top: 0,
     left: px,
     background: "var(--table-header-bg)",
-    zIndex: 6, // header di atas sel
+    zIndex: 6,
     boxShadow: px
       ? "var(--table-sticky-shadow-left)"
       : "inset 0 -1px 0 var(--border)",
@@ -193,7 +189,9 @@ export default function RekapJasmaniPolda() {
   // ==================== definisi kolom ====================
   const anthroCols = [
     { key: "tb_cm", label: "TB (cm)" },
+    { key: "tb_inchi", label: "TB (inchi)", num: true },
     { key: "bb_kg", label: "BB (kg)" },
+    { key: "bb_akbb", label: "BB AKBB", num: true },
     { key: "ratio_index", label: "Ratio" },
     { key: "somato_type", label: "Somato" },
     { key: "klasifikasi_tipe_tubuh", label: "Klasifikasi" },
@@ -201,49 +199,32 @@ export default function RekapJasmaniPolda() {
     { key: "nilai_kelainan", label: "Nilai Kelainan", num: true },
     { key: "nilai_terkecil", label: "Nilai Terkecil", num: true },
     { key: "nilai_anthro", label: "Nilai Anthro", num: true },
+    { key: "antro", label: "ANTRO (raw)" },
+    { key: "antro_pembobotan", label: "ANTHRO Pembobotan" },
     { key: "pencapaian_nbl", label: "NBL" },
   ];
 
-  const hasLari = items.some((it) => it.lari_12_menit != null);
-
-  const hasHgbNgb =
-    items.some(
-      (it) =>
-        it.pull_up_hgb1 != null ||
-        it.pull_up_ngb1 != null ||
-        it.sit_up_hgb2 != null ||
-        it.sit_up_ngb2 != null ||
-        it.push_up_hgb3 != null ||
-        it.push_up_ngb3 != null ||
-        it.shuttle_run_hgb4 != null ||
-        it.shuttle_run_ngb4 != null
-    ) || true;
-
   const samaptaCols = [
-    ...(hasLari
-      ? [{ key: "lari_12_menit", label: "Lari 12 Menit", num: true }]
-      : []),
     { key: "kesamaptaan_hga", label: "Kesamaptaan HGA" },
     { key: "kesamaptaan_nga", label: "Kesamaptaan NGA" },
-    ...(hasHgbNgb
-      ? [
-          { key: "pull_up_hgb1", label: "Pull Up HGB1", num: true },
-          { key: "pull_up_ngb1", label: "Pull Up NGB1", num: true },
-          { key: "sit_up_hgb2", label: "Sit Up HGB2", num: true },
-          { key: "sit_up_ngb2", label: "Sit Up NGB2", num: true },
-          { key: "push_up_hgb3", label: "Push Up HGB3", num: true },
-          { key: "push_up_ngb3", label: "Push Up NGB3", num: true },
-          { key: "shuttle_run_hgb4", label: "Shuttle Run HGB4", num: true },
-          { key: "shuttle_run_ngb4", label: "Shuttle Run NGB4", num: true },
-        ]
-      : []),
-    { key: "renang", label: "Renang", num: true },
+    { key: "pull_up_hgb1", label: "Pull Up HGB1", num: true },
+    { key: "pull_up_ngb1", label: "Pull Up NGB1", num: true },
+    { key: "sit_up_hgb2", label: "Sit Up HGB2", num: true },
+    { key: "sit_up_ngb2", label: "Sit Up NGB2", num: true },
+    { key: "push_up_hgb3", label: "Push Up HGB3", num: true },
+    { key: "push_up_ngb3", label: "Push Up NGB3", num: true },
+    { key: "shuttle_run_hgb4", label: "Shuttle Run HGB4", num: true },
+    { key: "shuttle_run_ngb4", label: "Shuttle Run NGB4", num: true },
+    { key: "renang_jarak", label: "Renang Jarak", num: true },
+    { key: "renang_waktu", label: "Renang Waktu", num: true },
+    { key: "renang_nilai", label: "Renang Nilai", num: true },
+    { key: "renang", label: "Renang (Total)", num: true },
   ];
 
   const rekapCols = [
     { key: "nilai_b", label: "Nilai B", num: true },
     { key: "na_a_b", label: "NA A+B", num: true },
-    { key: "antro_text", label: "Antro (Kategori)" },
+    { key: "kesamaptaan_a_b", label: "Kesamaptaan A+B", num: true },
     { key: "renang_x20", label: "Renang ×20", num: true },
     { key: "samapta_x80", label: "Samapta ×80", num: true },
     { key: "nilai_akhir", label: "Nilai Akhir", num: true },
@@ -279,7 +260,6 @@ export default function RekapJasmaniPolda() {
 
     try {
       const token = await window.authAPI?.getToken?.();
-      // ⚠️ SESUAIKAN DENGAN ROUTE SERVER KAMU
       const r = await fetch(`${API}/jasmani-polda/${row.id}/set-siswa`, {
         method: "PATCH",
         headers: {
@@ -292,7 +272,7 @@ export default function RekapJasmaniPolda() {
       });
 
       if (!r.ok) {
-        // rollback kalau gagal
+        // rollback
         setItems((old) =>
           old.map((it) => (it.id === row.id ? { ...it, siswa_id: prev } : it))
         );
@@ -303,7 +283,6 @@ export default function RekapJasmaniPolda() {
         throw new Error(msg || `HTTP ${r.status}`);
       }
 
-      // sukses
       toast.update(tId, {
         type: "success",
         title: "Tersimpan",
@@ -430,7 +409,7 @@ export default function RekapJasmaniPolda() {
             className="table"
             style={{
               width: "100%",
-              minWidth: 2400,
+              minWidth: 2800, // diperlebar karena banyak kolom baru
               borderCollapse: "separate",
               borderSpacing: 0,
             }}
@@ -611,7 +590,7 @@ export default function RekapJasmaniPolda() {
                       {r.no_panda ?? "-"}
                     </td>
 
-                    {/* Nama dari Excel (apa adanya) */}
+                    {/* Nama dari Excel */}
                     <td
                       style={{
                         ...stickyLeftTD(W_NOSIS + 120),

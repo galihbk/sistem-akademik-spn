@@ -290,13 +290,15 @@ CREATE TABLE jasmani_polda (
   -- identitas
   no_panda TEXT,
   nama TEXT,
-  jenis_kelamin TEXT,
+  jenis_kelamin TEXT,     -- "JK"
   jalur_seleksi TEXT,
   angkatan TEXT,
 
-  -- antropometri
+  -- antropometri (angka & teks)
   tb_cm NUMERIC(10,2),
+  tb_inchi NUMERIC(10,2),
   bb_kg NUMERIC(10,2),
+  bb_akbb NUMERIC(10,2),
   ratio_index TEXT,
   somato_type TEXT,
   klasifikasi_tipe_tubuh TEXT,
@@ -304,15 +306,16 @@ CREATE TABLE jasmani_polda (
   nilai_kelainan NUMERIC(10,2),
   nilai_terkecil NUMERIC(10,2),
   nilai_anthro NUMERIC(10,2),
-  antro TEXT,
-  antro_text TEXT,
+
+  -- atribut lain
   pencapaian_nbl TEXT,
 
-  -- renang
-  renang NUMERIC(10,2),
-  renang_x20 NUMERIC(10,2),
+  -- renang per-detail (opsional dari sheet)
+  renang_jarak NUMERIC(10,2),
+  renang_waktu NUMERIC(10,2),
+  renang_nilai NUMERIC(10,2),
 
-  -- Kesamaptaan A (label)
+  -- Kesamaptaan A (label, teks)
   kesamaptaan_hga TEXT,
   kesamaptaan_nga TEXT,
 
@@ -328,8 +331,13 @@ CREATE TABLE jasmani_polda (
 
   -- rekap
   nilai_b NUMERIC(10,2),
-  na_a_b NUMERIC(10,2),
-  samapta_x80 NUMERIC(10,2),
+  na_a_b NUMERIC(10,2),            -- "NA A+B"
+  antro TEXT,                      -- "ANTRO" mentah dari sheet
+  renang NUMERIC(10,2),            -- "RENANG" total dari sheet
+  kesamaptaan_a_b NUMERIC(10,2),   -- "KESAMAPTAAN A+B" (sheet)
+  antro_pembobotan TEXT,           -- "ANTHRO PEMBOBOTAN" → teks kategori
+  renang_x20 NUMERIC(10,2),        -- "RENANG X20"
+  samapta_x80 NUMERIC(10,2),       -- "SAMAPTA X80"
   nilai_akhir NUMERIC(10,2),
   ktgr TEXT,
   ket TEXT,
@@ -344,8 +352,14 @@ CREATE TABLE jasmani_polda (
 
   UNIQUE (no_panda, angkatan)
 );
-CREATE INDEX idx_jp_nopanda ON jasmani_polda (no_panda);
-CREATE INDEX idx_jp_angkatan ON jasmani_polda (angkatan);
-CREATE INDEX idx_jp_nama_lower ON jasmani_polda (LOWER(nama));
-CREATE TRIGGER trg_jasmani_polda_updated BEFORE UPDATE ON jasmani_polda FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- index
+CREATE INDEX idx_jp_nopanda     ON jasmani_polda (no_panda);
+CREATE INDEX idx_jp_angkatan    ON jasmani_polda (angkatan);
+CREATE INDEX idx_jp_nama_lower  ON jasmani_polda (LOWER(nama));
+
+-- trigger updated_at
+CREATE TRIGGER trg_jasmani_polda_updated
+BEFORE UPDATE ON jasmani_polda
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 -- ========== END ==========

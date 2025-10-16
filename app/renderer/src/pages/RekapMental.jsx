@@ -512,16 +512,6 @@ export default function RekapMental() {
                     minWidth: 110,
                   }}
                 >
-                  R. Global
-                </th>
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyTop,
-                    textAlign: "center",
-                    minWidth: 110,
-                  }}
-                >
                   R. Batalion
                 </th>
                 <th
@@ -598,9 +588,6 @@ export default function RekapMental() {
                       </td>
                       <td style={{ ...numCell }}>{fmtSum(r.sum)}</td>
                       <td style={{ ...numCell }}>{fmtAvg(r.avg)}</td>
-                      <td style={{ textAlign: "center" }}>
-                        {fmtRank(r.rank?.global)}
-                      </td>
                       <td style={{ textAlign: "center" }}>
                         {fmtRank(r.rank?.batalion)}
                       </td>

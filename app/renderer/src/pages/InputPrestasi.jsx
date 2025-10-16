@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useToast } from "../components/Toaster";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-/* ======================= Util kecil ======================= */
+/* ======================= Utils ======================= */
 function buildDownloadUrl(filePath) {
   if (!filePath) return "#";
   const clean = String(filePath)
@@ -77,7 +77,7 @@ function Modal({ open, onClose, title, children }) {
           }}
         >
           <div style={{ fontWeight: 800, fontSize: 18 }}>{title}</div>
-          <button className="btn" onClick={onClose}>
+          <button type="button" className="btn" onClick={onClose}>
             Tutup
           </button>
         </div>
@@ -87,9 +87,9 @@ function Modal({ open, onClose, title, children }) {
   );
 }
 
-/* ======================= Komponen utama ======================= */
+/* ======================= Halaman ======================= */
 export default function InputPrestasi() {
-  const { toast } = useToast();
+  const toast = useToast();
 
   /* ---------- state: history ---------- */
   const [items, setItems] = useState([]);
@@ -102,8 +102,8 @@ export default function InputPrestasi() {
   /* ---------- state: modal form ---------- */
   const [open, setOpen] = useState(false);
 
-  const [siswaId, setSiswaId] = useState(null); // pakai ID
-  const [query, setQuery] = useState(""); // tampilan teks (NOSIS — Nama)
+  const [siswaId, setSiswaId] = useState(null);
+  const [query, setQuery] = useState(""); // "NOSIS — Nama"
   const [judul, setJudul] = useState("");
   const [tingkat, setTingkat] = useState("");
   const [deskripsi, setDeskripsi] = useState("");
@@ -129,50 +129,46 @@ export default function InputPrestasi() {
       .slice(0, 20);
   }, [sug, q]);
 
-  // helper untuk tutup modal setelah delay
-  const closeAfter = (ms = 900) => {
-    setTimeout(() => {
-      setOpen(false);
-      setOpenList(false);
-    }, ms);
-  };
+  /* ---------- URL builder & fetchList ---------- */
+  const buildListUrl = useCallback(
+    (pageArg, qArg) => {
+      const u = new URL(`${API}/prestasi`);
+      if (qArg.trim()) u.searchParams.set("q", qArg.trim());
+      u.searchParams.set("page", String(pageArg));
+      u.searchParams.set("limit", String(limit));
+      u.searchParams.set("sort_dir", "desc");
+      return u.toString();
+    },
+    [limit]
+  );
 
-  /* ---------- fetch history ---------- */
-  const listUrl = useMemo(() => {
-    const u = new URL(`${API}/prestasi`);
-    if (qHist.trim()) u.searchParams.set("q", qHist.trim());
-    u.searchParams.set("page", String(page));
-    u.searchParams.set("limit", String(limit));
-    u.searchParams.set("sort_dir", "desc");
-    return u.toString();
-  }, [qHist, page, limit]);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
+  const fetchList = useCallback(
+    async (pageArg = page, qArg = qHist) => {
+      setLoadingList(true);
       try {
-        setLoadingList(true);
         const token = await window.authAPI?.getToken?.();
-        const r = await fetch(listUrl, {
+        const r = await fetch(buildListUrl(pageArg, qArg), {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         const data = await r.json().catch(() => ({}));
-        if (!alive) return;
-        setItems(Array.isArray(data.items) ? data.items : []);
+        const arr = Array.isArray(data.items) ? data.items : [];
+        setItems(arr);
         setTotal(data.total ?? 0);
+        return arr.length;
       } catch {
-        if (!alive) return;
         setItems([]);
         setTotal(0);
+        return 0;
       } finally {
-        if (!alive) return;
         setLoadingList(false);
       }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [listUrl]);
+    },
+    [page, qHist, buildListUrl]
+  );
+
+  useEffect(() => {
+    fetchList(page, qHist);
+  }, [page, qHist, fetchList]);
 
   /* ---------- search siswa (modal) ---------- */
   useEffect(() => {
@@ -246,7 +242,7 @@ export default function InputPrestasi() {
 
   function pickSiswa(s) {
     setSiswaId(s.id);
-    setQuery(`${String(s.nosis || "").padStart(4, "0")} — ${s.nama}`);
+    setQuery(`${s.nosis} — ${s.nama}`);
     setOpenList(false);
   }
 
@@ -264,7 +260,6 @@ export default function InputPrestasi() {
 
   /* ---------- submit ---------- */
   async function submit() {
-    // validasi → toast error
     if (!siswaId) {
       toast.error("Pilih siswa dari daftar terlebih dahulu.");
       return;
@@ -297,18 +292,24 @@ export default function InputPrestasi() {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || "Gagal menyimpan prestasi");
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {}
+
+      if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
 
       toast.update(tId, {
         type: "success",
         message: "Berhasil disimpan.",
-        autoClose: 2500,
+        autoClose: 2000,
       });
 
-      // refresh list dari page 1
+      // refresh list dari page 1 SEKARANG
       setPage(1);
-      // kosongkan field selain siswa agar input beruntun
+      await fetchList(1, qHist);
+
+      // kosongkan sebagian field biar input beruntun
       setJudul("");
       setTingkat("");
       setDeskripsi("");
@@ -316,7 +317,10 @@ export default function InputPrestasi() {
       const el = document.getElementById("prestasiFileInput");
       if (el) el.value = "";
 
-      closeAfter(600); // tutup modal agak cepat
+      setTimeout(() => {
+        setOpen(false);
+        setOpenList(false);
+      }, 400);
     } catch (e) {
       if (tId) {
         toast.update(tId, {
@@ -332,13 +336,57 @@ export default function InputPrestasi() {
     }
   }
 
-  /* ---------- toaster untuk progres unduhan (Electron) ---------- */
+  /* ---------- hapus ---------- */
+  async function handleDelete(row) {
+    if (!row?.id) return;
+    const ok = confirm(`Hapus data prestasi "${row.judul || "-"}"?`);
+    if (!ok) return;
+
+    let tId;
+    try {
+      tId = toast.loading("Menghapus…", { autoClose: false });
+      const token = await window.authAPI?.getToken?.();
+      const r = await fetch(`${API}/prestasi/${row.id}`, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      let data = {};
+      try {
+        data = await r.json();
+      } catch {}
+      if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`);
+
+      // refetch current page
+      const len = await fetchList(page, qHist);
+      // kalau page jadi kosong & page > 1 → mundur 1, refetch
+      if (len === 0 && page > 1) {
+        setPage((p) => p - 1);
+        await fetchList(page - 1, qHist);
+      }
+
+      toast.update(tId, {
+        type: "success",
+        message: "Berhasil dihapus.",
+        autoClose: 1800,
+      });
+    } catch (e) {
+      if (tId) {
+        toast.update(tId, {
+          type: "error",
+          message: `Gagal menghapus: ${e.message}`,
+          autoClose: 5000,
+        });
+      } else {
+        toast.error(`Gagal menghapus: ${e.message}`, { autoClose: 5000 });
+      }
+    }
+  }
+
+  /* ---------- toaster progres unduhan (Electron) ---------- */
   useEffect(() => {
-    // Dengarkan proses unduhan global
     const off = window.electronAPI?.onDownloadStatus?.((p) => {
       if (!p || p.type !== "download") return;
 
-      // simpan id toast pada closure
       if (!InputPrestasi._dlToastId && p.phase === "start") {
         InputPrestasi._dlToastId = toast.loading("Menyiapkan file…", {
           autoClose: false,
@@ -382,8 +430,7 @@ export default function InputPrestasi() {
     return () => {
       off && off();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [toast]);
 
   /* ---------- UI ---------- */
   return (
@@ -403,7 +450,7 @@ export default function InputPrestasi() {
             Catat prestasi per-siswa, lampiran opsional.
           </div>
         </div>
-        <button className="btn" onClick={() => setOpen(true)}>
+        <button type="button" className="btn" onClick={() => setOpen(true)}>
           + Input Prestasi
         </button>
       </div>
@@ -451,18 +498,19 @@ export default function InputPrestasi() {
                 <th style={{ textAlign: "left" }}>Tanggal</th>
                 <th style={{ textAlign: "left" }}>File</th>
                 <th style={{ textAlign: "left" }}>Dibuat</th>
+                <th style={{ textAlign: "left" }}>Aksi</th>
               </tr>
             </thead>
             <tbody>
               {loadingList ? (
                 <tr>
-                  <td colSpan={7} className="muted" style={{ padding: 12 }}>
+                  <td colSpan={8} className="muted" style={{ padding: 12 }}>
                     Memuat…
                   </td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="muted" style={{ padding: 12 }}>
+                  <td colSpan={8} className="muted" style={{ padding: 12 }}>
                     Tidak ada data.
                   </td>
                 </tr>
@@ -479,12 +527,11 @@ export default function InputPrestasi() {
                     <td style={{ whiteSpace: "nowrap" }}>
                       {r.file_path ? (
                         <button
+                          type="button"
                           className="btn"
                           style={{ padding: "6px 10px" }}
                           onClick={async () => {
                             const url = buildDownloadUrl(r.file_path);
-
-                            // periksa file ada
                             const ok = await tryHead(url);
                             if (!ok) {
                               toast.error("File tidak ditemukan.", {
@@ -492,11 +539,8 @@ export default function InputPrestasi() {
                               });
                               return;
                             }
-
-                            // Mulai unduh (IPC Electron → akan update progres lewat onDownloadStatus)
                             if (window.electronAPI?.download) {
                               window.electronAPI.download(url);
-                              // munculkan toast awal jika plugin progres belum sempat kirim 'start'
                               if (!InputPrestasi._dlToastId) {
                                 InputPrestasi._dlToastId = toast.loading(
                                   "Menyiapkan file…",
@@ -506,7 +550,6 @@ export default function InputPrestasi() {
                                 );
                               }
                             } else {
-                              // fallback browser
                               const a = document.createElement("a");
                               a.href = url;
                               a.download = "";
@@ -528,6 +571,21 @@ export default function InputPrestasi() {
                     <td style={{ whiteSpace: "nowrap" }}>
                       {fmtDate(r.created_at)}
                     </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{
+                          background: "#1b0c0c",
+                          border: "1px solid #7f1d1d",
+                          color: "#fca5a5",
+                          padding: "6px 10px",
+                        }}
+                        onClick={() => handleDelete(r)}
+                      >
+                        Hapus
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
@@ -539,6 +597,7 @@ export default function InputPrestasi() {
       {/* Pagination */}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button
+          type="button"
           className="btn"
           onClick={() => setPage((p) => Math.max(1, p - 1))}
           disabled={page <= 1}
@@ -547,6 +606,7 @@ export default function InputPrestasi() {
         </button>
         <span className="badge">Page {page}</span>
         <button
+          type="button"
           className="btn"
           onClick={() => setPage((p) => p + 1)}
           disabled={items.length < limit}
@@ -560,7 +620,7 @@ export default function InputPrestasi() {
         open={open}
         onClose={() => {
           setOpen(false);
-          setOpenList(false); // penting: tutup dropdown saat modal ditutup
+          setOpenList(false);
         }}
         title="Input Prestasi"
       >
@@ -587,7 +647,7 @@ export default function InputPrestasi() {
             />
 
             {/* Dropdown – hanya muncul saat BELUM memilih siswa */}
-            {openList && !siswaId && (
+            {openList && !siswaId && q.length >= 2 && (
               <div
                 ref={listRef}
                 style={{
@@ -597,7 +657,7 @@ export default function InputPrestasi() {
                   right: 0,
                   marginTop: 6,
                   background: "var(--panel)",
-                  border: "1px solid var(--border)",
+                  border: "1px solid " + "var(--border)",
                   borderRadius: 10,
                   boxShadow: "0 10px 20px rgba(0,0,0,.35)",
                   maxHeight: 280,
@@ -648,7 +708,7 @@ export default function InputPrestasi() {
                       }
                     >
                       <div style={{ fontWeight: 700 }}>
-                        {String(s.nosis || "-").padStart(4, "0")} — {s.nama}
+                        {s.nosis ?? "-"} — {s.nama || "-"}
                       </div>
                       <div className="muted" style={{ fontSize: 12 }}>
                         {s.nik ? `NIK ${s.nik}` : "NIK -"}
@@ -722,10 +782,20 @@ export default function InputPrestasi() {
 
         {/* Action */}
         <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-          <button className="btn" disabled={saving} onClick={submit}>
+          <button
+            type="button"
+            className="btn"
+            disabled={saving}
+            onClick={submit}
+          >
             {saving ? "Menyimpan..." : "Simpan"}
           </button>
-          <button className="btn" onClick={clearForm} disabled={saving}>
+          <button
+            type="button"
+            className="btn"
+            onClick={clearForm}
+            disabled={saving}
+          >
             Reset
           </button>
         </div>
@@ -734,5 +804,4 @@ export default function InputPrestasi() {
   );
 }
 
-// simpan id toast unduhan pada fungsi (static properti)
 InputPrestasi._dlToastId = null;

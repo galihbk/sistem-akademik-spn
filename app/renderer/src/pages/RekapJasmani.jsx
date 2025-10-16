@@ -530,18 +530,6 @@ export default function RekapJasmani() {
                 >
                   Tahap
                 </th>
-
-                <th
-                  rowSpan={2}
-                  style={{
-                    ...thBase,
-                    ...stickyTop,
-                    ...centerCell,
-                    minWidth: 110,
-                  }}
-                >
-                  R. Global
-                </th>
                 <th
                   rowSpan={2}
                   style={{
@@ -679,8 +667,6 @@ export default function RekapJasmani() {
                       {r.kelompok_angkatan ?? "-"}
                     </td>
                     <td style={{ ...centerCell }}>{r.tahap ?? "-"}</td>
-
-                    <td style={{ ...centerCell }}>{fmtRank(r.rank?.global)}</td>
                     <td style={{ ...centerCell }}>
                       {fmtRank(r.rank?.batalion)}
                     </td>

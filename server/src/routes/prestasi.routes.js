@@ -4,7 +4,8 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const BASE_UPLOAD = process.env.UPLOAD_DIR || path.join(__dirname, "../../uploads");
+const BASE_UPLOAD =
+  process.env.UPLOAD_DIR || path.join(__dirname, "../../uploads");
 
 // simpan ke uploads/prestasi/YYYY/MM/
 const storage = multer.diskStorage({
@@ -26,7 +27,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// set path relatif dari folder uploads/
+// set path relatif (dari folder uploads/) agar disimpan ke DB
 function rememberRelativePath(req, _res, next) {
   if (req.file) {
     const abs = req.file.path;
@@ -34,7 +35,10 @@ function rememberRelativePath(req, _res, next) {
       .split(path.join(BASE_UPLOAD, path.sep))
       .pop()
       .replace(/\\/g, "/");
-    req.file.storedAs = rel.startsWith("uploads/") ? rel.replace(/^uploads\//, "") : rel;
+    // simpan di properti khusus agar controller bisa pakai
+    req.file.storedAs = rel.startsWith("uploads/")
+      ? rel.replace(/^uploads\//, "")
+      : rel;
   }
   next();
 }

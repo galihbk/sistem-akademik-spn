@@ -610,16 +610,6 @@ export default function RekapMapel() {
                     minWidth: 110,
                   }}
                 >
-                  R. Global
-                </th>
-                <th
-                  style={{
-                    ...thBase,
-                    ...stickyTop,
-                    textAlign: "center",
-                    minWidth: 110,
-                  }}
-                >
                   R. Batalion
                 </th>
                 <th
@@ -698,9 +688,6 @@ export default function RekapMapel() {
                         {fmtSum(r.sum ?? r.jumlah)}
                       </td>
                       <td style={{ ...numCell }}>{fmtAvg(r.avg ?? r.rata2)}</td>
-                      <td style={{ textAlign: "center" }}>
-                        {fmtRank(r.rank?.global)}
-                      </td>
                       <td style={{ textAlign: "center" }}>
                         {fmtRank(r.rank?.batalion)}
                       </td>

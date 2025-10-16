@@ -32,9 +32,7 @@ const upload = multer({ storage });
 // simpan path relatif dari folder uploads/
 function rememberRelativePath(req, _res, next) {
   if (req.file) {
-    const rel = path
-      .relative(BASE_UPLOAD, req.file.path)
-      .replace(/\\/g, "/"); // windows safe
+    const rel = path.relative(BASE_UPLOAD, req.file.path).replace(/\\/g, "/");
     req.file.storedAs = rel.startsWith("uploads/")
       ? rel.replace(/^uploads\//, "")
       : rel;

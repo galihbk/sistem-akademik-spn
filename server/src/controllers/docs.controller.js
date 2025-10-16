@@ -1,5 +1,31 @@
 // server/src/controllers/docs.controller.js
+const path = require("path");
+const fs = require("fs");
 const pool = require("../db/pool");
+
+/** Samakan dengan app.js */
+const PROJECT_ROOT = process.env.PROJECT_ROOT
+  ? path.resolve(process.env.PROJECT_ROOT)
+  : path.resolve(process.cwd());
+
+const UPLOAD_DIR = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.join(PROJECT_ROOT, "uploads");
+
+/** Hapus file aman: hanya jika path berada di dalam UPLOAD_DIR */
+async function unlinkIfSafe(filePath) {
+  if (!filePath) return;
+  try {
+    const abs = path.isAbsolute(filePath)
+      ? filePath
+      : path.resolve(PROJECT_ROOT, filePath);
+    const inside = abs.startsWith(UPLOAD_DIR + path.sep) || abs === UPLOAD_DIR;
+    if (!inside) return; // abaikan path mencurigakan
+    await fs.promises.unlink(abs).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
 
 /**
  * Factory controller untuk tabel dokumen sederhana (bk | pelanggaran).
@@ -33,8 +59,6 @@ function makeListController(tableName) {
                     OR LOWER(s.nosis) LIKE $${params.length})`;
       }
 
-      // gunakan created_at kalau ada; kalau NULL, taruh di belakang, lalu fallback urut ID
-      // tidak pakai COALESCE beda tipe lagi.
       const orderClause = `
         ORDER BY d.created_at ${sortDir} NULLS LAST,
                  d.id ${sortDir}
@@ -77,6 +101,41 @@ function makeListController(tableName) {
     }
   };
 }
+
+/**
+ * DELETE /bk/:id atau /pelanggaran/:id
+ * Hapus baris + file fisik (kalau ada)
+ */
+function makeDeleteController(tableName) {
+  return async function del(req, res) {
+    const id = Number(req.params.id) || 0;
+    if (!id) {
+      return res.status(400).json({ ok: false, message: "ID tidak valid" });
+    }
+    try {
+      // ambil file_path dulu lalu hapus baris
+      const { rows, rowCount } = await pool.query(
+        `DELETE FROM ${tableName} WHERE id=$1 RETURNING file_path`,
+        [id]
+      );
+      if (!rowCount) {
+        return res
+          .status(404)
+          .json({ ok: false, message: "Data tidak ditemukan" });
+      }
+      const filePath = rows[0]?.file_path || null;
+      await unlinkIfSafe(filePath);
+      return res.json({ ok: true, deleted_id: id });
+    } catch (e) {
+      console.error(`[${tableName}.delete]`, e);
+      return res
+        .status(500)
+        .json({ ok: false, message: `Gagal menghapus data ${tableName}` });
+    }
+  };
+}
+
+/** (Masih kamu punya; biarkan) */
 async function listPrestasi(req, res) {
   const q = (req.query.q || "").trim().toLowerCase();
   const page = Math.max(parseInt(req.query.page || "1", 10), 1);
@@ -123,4 +182,9 @@ async function listPrestasi(req, res) {
     q,
   });
 }
-module.exports = { makeListController };
+
+module.exports = {
+  makeListController,
+  makeDeleteController,
+  listPrestasi,
+};

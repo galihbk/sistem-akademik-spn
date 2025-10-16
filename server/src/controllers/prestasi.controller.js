@@ -1,14 +1,14 @@
-// controllers/prestasi.controller.js
 const fs = require("fs");
 const path = require("path");
 const pool = require("../db/pool");
 
-function relPath(abs) {
-  // hasilkan path relatif dari folder project (untuk disimpan di DB)
-  const up = path.resolve(__dirname, "..");
-  let rel = path.relative(up, abs).replace(/\\/g, "/");
-  // simpan tanpa prefix "./"
-  if (rel.startsWith("./")) rel = rel.slice(2);
+const BASE_UPLOAD =
+  process.env.UPLOAD_DIR || path.join(__dirname, "../../uploads");
+
+function relPathFromProject(abs) {
+  // path relatif dari folder uploads, supaya portable
+  let rel = abs.split(path.join(BASE_UPLOAD, path.sep)).pop() || "";
+  rel = rel.replace(/\\/g, "/");
   return rel;
 }
 
@@ -31,7 +31,11 @@ exports.create = async (req, res) => {
         .json({ ok: false, message: "Siswa tidak ditemukan" });
     }
 
-    const fp = req.file ? relPath(req.file.path) : null;
+    // ambil path relatif yang udah diset di middleware (kalau ada)
+    let fp = null;
+    if (req.file) {
+      fp = req.file.storedAs || relPathFromProject(req.file.path);
+    }
 
     const q =
       "INSERT INTO prestasi (siswa_id, tingkat, deskripsi, tanggal, judul, file_path) " +
@@ -70,8 +74,8 @@ exports.remove = async (req, res) => {
     // hapus file kalau ada
     const fp = rows[0].file_path;
     if (fp) {
-      const abs = path.resolve(__dirname, "..", fp);
-      fs.promises.unlink(abs).catch(() => {}); // abaikan kalau sudah tidak ada
+      const abs = path.join(BASE_UPLOAD, fp);
+      fs.promises.unlink(abs).catch(() => {});
     }
 
     res.json({ ok: true });
@@ -80,11 +84,15 @@ exports.remove = async (req, res) => {
     res.status(500).json({ ok: false, message: e.message });
   }
 };
+
 exports.list = async (req, res) => {
   try {
     const q = (req.query.q || "").trim().toLowerCase();
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 200);
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit || "20", 10), 1),
+      200
+    );
     const offset = (page - 1) * limit;
 
     const params = [];
@@ -117,11 +125,13 @@ exports.list = async (req, res) => {
       ${where};
     `;
 
-    const [data, count] = await Promise.all([pool.query(sqlData, params), pool.query(sqlCount, params)]);
+    const [data, count] = await Promise.all([
+      pool.query(sqlData, params),
+      pool.query(sqlCount, params),
+    ]);
     res.json({ items: data.rows, total: count.rows[0].total, page, limit });
   } catch (e) {
     console.error("[prestasi.list]", e);
     res.status(500).json({ message: "Gagal mengambil data prestasi" });
   }
 };
-

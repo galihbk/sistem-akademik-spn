@@ -18,12 +18,15 @@ exports.create = async (req, res) => {
     }
 
     const s = await pool.query("SELECT id FROM siswa WHERE id=$1", [sid]);
-    if (!s.rowCount)
+    if (!s.rowCount) {
       return res
         .status(404)
         .json({ ok: false, message: "Siswa tidak ditemukan" });
+    }
 
-    const fileRelPath = req.file ? req.file.storedAs : null; // diset di middleware
+    // path relatif hasil dari middleware rememberRelativePath
+    const fileRelPath = req.file ? req.file.storedAs : null;
+
     const { rows } = await pool.query(
       `INSERT INTO riwayat_kesehatan (siswa_id, judul, deskripsi, tanggal, file_path)
        VALUES ($1,$2,$3,$4,$5)
@@ -47,50 +50,58 @@ exports.remove = async (req, res) => {
       "DELETE FROM riwayat_kesehatan WHERE id=$1 RETURNING file_path",
       [id]
     );
-    if (!rows.length)
+    if (!rows.length) {
       return res
         .status(404)
         .json({ ok: false, message: "Data tidak ditemukan" });
+    }
 
     // hapus file jika ada
     const rel = rows[0].file_path;
     if (rel) {
-      const abs = path.join(
-        process.env.UPLOAD_DIR || path.join(__dirname, "../../uploads"),
-        rel
-      );
+      const base =
+        process.env.UPLOAD_DIR || path.join(__dirname, "../../uploads");
+      const abs = path.join(base, rel);
       fs.promises.unlink(abs).catch(() => {});
     }
+
     res.json({ ok: true });
   } catch (e) {
     console.error("[riwayat.remove]", e);
     res.status(500).json({ ok: false, message: e.message });
   }
 };
+
 exports.list = async (req, res) => {
   try {
     const q = (req.query.q || "").trim().toLowerCase();
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100);
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit || "20", 10), 1),
+      100
+    );
     const offset = (page - 1) * limit;
 
-    const sortBy = ["created_at", "tanggal"].includes((req.query.sort_by || "").toLowerCase())
+    const sortBy = ["created_at", "tanggal"].includes(
+      (req.query.sort_by || "").toLowerCase()
+    )
       ? req.query.sort_by.toLowerCase()
       : "created_at";
-    const sortDir = ["asc", "desc"].includes((req.query.sort_dir || "").toLowerCase())
+    const sortDir = ["asc", "desc"].includes(
+      (req.query.sort_dir || "").toLowerCase()
+    )
       ? req.query.sort_dir.toLowerCase()
       : "desc";
 
     const params = [];
     let where = "WHERE 1=1";
     if (q) {
-      params.push(`%${q}%`);
-      params.push(`%${q}%`);
-      params.push(`%${q}%`);
+      // tambahkan 3 parameter sekaligus
+      params.push(`%${q}%`, `%${q}%`, `%${q}%`);
       where += `
         AND (
           LOWER(r.judul) LIKE $${params.length - 2}
-          OR LOWER(s.nama) LIKE $${params.length - 1}
+          OR LOWER(s.nama)  LIKE $${params.length - 1}
           OR LOWER(s.nosis) LIKE $${params.length}
         )`;
     }
@@ -109,7 +120,7 @@ exports.list = async (req, res) => {
       FROM riwayat_kesehatan r
       JOIN siswa s ON s.id = r.siswa_id
       ${where}
-      ORDER BY ${sortBy} ${sortDir}, r.id DESC
+      ORDER BY r.${sortBy} ${sortDir}, r.id DESC
       LIMIT ${limit} OFFSET ${offset};
     `;
     const sqlCount = `

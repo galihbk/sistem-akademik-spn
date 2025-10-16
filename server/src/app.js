@@ -89,7 +89,7 @@ app.use("/pelanggaran", makeDocsRoutes("pelanggaran"));
 app.use("/mapel", mapelRoutes);
 app.use("/jasmani", jasmaniRoutes);
 app.use("/jasmani-polda", jasmaniPoldaRoutes);
-app.use('/api', require('./routes/backup.routes'));
+app.use("/api", require("./routes/backup.routes"));
 
 // Health checks
 app.get("/health", (_req, res) => res.json({ ok: true }));

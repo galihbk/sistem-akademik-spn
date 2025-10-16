@@ -81,6 +81,7 @@ export default function UploadPdf({ kind }) {
   const [items, setItems] = useState([]);
   const [openList, setOpenList] = useState(false);
   const boxRef = useRef(null);
+  const inputRef = useRef(null);
   const timerRef = useRef(null);
 
   // history
@@ -88,7 +89,7 @@ export default function UploadPdf({ kind }) {
   const [histLoading, setHistLoading] = useState(false);
 
   // alerts (di atas tabel)
-  const [alert, setAlert] = useState({ type: "", text: "" }); // type: "success" | "danger" | ""
+  const [alert, setAlert] = useState({ type: "", text: "" }); // "success" | "danger" | ""
 
   // ===== filtered siswa (client) =====
   const filtered = useMemo(() => {
@@ -99,14 +100,20 @@ export default function UploadPdf({ kind }) {
       .slice(0, 20);
   }, [items, query]);
 
-  // debounce fetch siswa
+  // debounce fetch siswa (dengan guard jika query=label selected)
   useEffect(() => {
     if (!open) return;
     if (timerRef.current) clearTimeout(timerRef.current);
 
     const q = query.trim();
-    if (q.length < 2) {
+    const selectedLabel = selected
+      ? `${selected.nosis} — ${selected.nama}`
+      : "";
+
+    // jika pendek atau sama dengan label pilihan -> jangan fetch & tutup popover
+    if (q.length < 2 || (selected?.id && norm(q) === norm(selectedLabel))) {
       setItems([]);
+      setOpenList(false);
       return;
     }
 
@@ -121,7 +128,7 @@ export default function UploadPdf({ kind }) {
       }
     }, 300);
     return () => clearTimeout(timerRef.current);
-  }, [query, open]);
+  }, [query, open, selected]);
 
   // close dropdown on outside click
   useEffect(() => {
@@ -133,7 +140,7 @@ export default function UploadPdf({ kind }) {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  // ====== HISTORY (pakai endpoint baru /bk atau /pelanggaran) ======
+  // ====== HISTORY (pakai endpoint /bk atau /pelanggaran) ======
   async function loadHistory() {
     try {
       setHistLoading(true);
@@ -169,6 +176,8 @@ export default function UploadPdf({ kind }) {
     setSelected(it);
     setQuery(`${it.nosis} — ${it.nama}`);
     setOpenList(false);
+    setItems([]); // kosongkan list agar popover tak muncul lagi
+    inputRef.current?.blur(); // tutup via blur
   }
 
   async function submit() {
@@ -295,9 +304,6 @@ export default function UploadPdf({ kind }) {
           }}
         >
           <div style={{ fontWeight: 700 }}>Riwayat Terbaru</div>
-          <button className="btn" onClick={loadHistory} disabled={histLoading}>
-            {histLoading ? "Memuat…" : "Refresh"}
-          </button>
         </div>
 
         {/* ALERT BANNER */}
@@ -415,6 +421,7 @@ export default function UploadPdf({ kind }) {
           <div ref={boxRef} style={{ position: "relative" }}>
             <label className="muted">Cari NOSIS / Nama</label>
             <input
+              ref={inputRef}
               className="input"
               placeholder="Ketik NOSIS atau nama (min. 2 huruf) lalu pilih"
               value={query}
@@ -423,79 +430,90 @@ export default function UploadPdf({ kind }) {
                 setSelected(null);
                 setOpenList(true);
               }}
-              onFocus={() => query.trim().length >= 2 && setOpenList(true)}
+              onFocus={() => {
+                const label = selected
+                  ? `${selected.nosis} — ${selected.nama}`
+                  : "";
+                if (query.trim().length >= 2 && norm(query) !== norm(label)) {
+                  setOpenList(true);
+                }
+              }}
             />
-            {openList && query.trim().length >= 2 && (
-              <div
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  right: 0,
-                  top: "100%",
-                  marginTop: 6,
-                  maxHeight: 300,
-                  overflow: "auto",
-                  background: "#111827",
-                  border: "1px solid #334155",
-                  borderRadius: 12,
-                  padding: 8,
-                  zIndex: 1010,
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
-                }}
-              >
+            {openList &&
+              query.trim().length >= 2 &&
+              !(
+                selected?.id &&
+                norm(query) === norm(`${selected.nosis} — ${selected.nama}`)
+              ) && (
                 <div
-                  className="muted"
-                  style={{ padding: "6px 10px", color: "#cbd5e1" }}
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    top: "100%",
+                    marginTop: 6,
+                    maxHeight: 300,
+                    overflow: "auto",
+                    background: "#111827",
+                    border: "1px solid #334155",
+                    borderRadius: 12,
+                    padding: 8,
+                    zIndex: 1010,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+                  }}
                 >
-                  Ketik <b>NOSIS</b> atau nama, lalu pilih dari daftar.
-                </div>
-
-                {filtered.length === 0 ? (
                   <div
                     className="muted"
-                    style={{ padding: "8px 10px", color: "#cbd5e1" }}
+                    style={{ padding: "6px 10px", color: "#cbd5e1" }}
                   >
-                    Tidak ada hasil untuk <b>{query}</b>.
+                    Ketik <b>NOSIS</b> atau nama, lalu pilih dari daftar.
                   </div>
-                ) : (
-                  filtered.map((it) => (
-                    <button
-                      key={it.id}
-                      type="button"
-                      onClick={() => onPick(it)}
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        textAlign: "left",
-                        padding: "10px 12px",
-                        background: "#0f1424",
-                        color: "#e5e7eb",
-                        border: "1px solid #334155",
-                        borderRadius: 10,
-                        marginBottom: 8,
-                        cursor: "pointer",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = "#1f2937";
-                        e.currentTarget.style.borderColor = "#475569";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = "#0f1424";
-                        e.currentTarget.style.borderColor = "#334155";
-                      }}
+
+                  {filtered.length === 0 ? (
+                    <div
+                      className="muted"
+                      style={{ padding: "8px 10px", color: "#cbd5e1" }}
                     >
-                      <div style={{ fontWeight: 800 }}>
-                        {String(it.nosis || "-").padStart(4, "0")} —{" "}
-                        {it.nama || "-"}
-                      </div>
-                      <div style={{ color: "#94a3b8", fontSize: 12 }}>
-                        NIK {it.nik || "-"}
-                      </div>
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
+                      Tidak ada hasil untuk <b>{query}</b>.
+                    </div>
+                  ) : (
+                    filtered.map((it) => (
+                      <button
+                        key={it.id}
+                        type="button"
+                        onClick={() => onPick(it)}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "10px 12px",
+                          background: "#0f1424",
+                          color: "#e5e7eb",
+                          border: "1px solid #334155",
+                          borderRadius: 10,
+                          marginBottom: 8,
+                          cursor: "pointer",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "#1f2937";
+                          e.currentTarget.style.borderColor = "#475569";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "#0f1424";
+                          e.currentTarget.style.borderColor = "#334155";
+                        }}
+                      >
+                        <div style={{ fontWeight: 800 }}>
+                          {it.nosis ?? "-"} — {it.nama || "-"}
+                        </div>
+                        <div style={{ color: "#94a3b8", fontSize: 12 }}>
+                          NIK {it.nik || "-"}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
           </div>
 
           <div>
@@ -528,13 +546,6 @@ export default function UploadPdf({ kind }) {
             onChange={(e) => setFile(e.target.files[0] || null)}
           />
         </div>
-
-        {selected?.id && (
-          <div className="muted" style={{ marginTop: 8 }}>
-            Akan diupload untuk: <b>{selected.nosis}</b> — {selected.nama} (ID:{" "}
-            {selected.id})
-          </div>
-        )}
 
         <div
           style={{
