@@ -35,13 +35,22 @@ export default function RekapMapel() {
 
   const [weekColumns, setWeekColumns] = useState([]); // daftar pertemuan (1,2,3,...)
 
+  // === Jenis Pendidikan aktif (disimpan saat login)
+  const jenis = useMemo(
+    () => localStorage.getItem("sa.jenis_pendidikan") || "",
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [localStorage.getItem("sa.jenis_pendidikan")]
+  );
+
   // ==== opsi angkatan
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const token = await window.authAPI?.getToken?.();
-        const r = await fetch(`${API}/ref/angkatan`, {
+        const url = new URL(`${API}/ref/angkatan`);
+        if (jenis) url.searchParams.set("jenis", jenis); // ← gunakan Jenis Pendidikan
+        const r = await fetch(url.toString(), {
           headers: {
             Accept: "application/json",
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -54,7 +63,7 @@ export default function RekapMapel() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [jenis]);
 
   // ==== opsi mapel (opsional; fallback derive dari data)
   useEffect(() => {
@@ -91,12 +100,13 @@ export default function RekapMapel() {
     if (q) u.searchParams.set("q", q);
     if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
     if (mapelFilter) u.searchParams.set("mapel", mapelFilter);
+    if (jenis) u.searchParams.set("jenis", jenis); // ← gunakan Jenis Pendidikan
     u.searchParams.set("page", String(page));
     u.searchParams.set("limit", String(limit));
     u.searchParams.set("sort_by", sortBy);
     u.searchParams.set("sort_dir", sortDir);
     return u.toString();
-  }, [q, page, limit, sortBy, sortDir, angkatanEffective, mapelFilter]);
+  }, [q, page, limit, sortBy, sortDir, angkatanEffective, mapelFilter, jenis]);
 
   // ==== fetch data
   useEffect(() => {
@@ -182,6 +192,7 @@ export default function RekapMapel() {
     if (q) u.searchParams.set("q", q);
     if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
     if (mapelFilter) u.searchParams.set("mapel", mapelFilter);
+    if (jenis) u.searchParams.set("jenis", jenis); // ← gunakan Jenis Pendidikan
     u.searchParams.set("sort_by", sortBy);
     u.searchParams.set("sort_dir", sortDir);
     u.searchParams.set("all", "1"); // selalu semua baris hasil filter
@@ -365,13 +376,12 @@ export default function RekapMapel() {
   }
 
   // ==== helpers sticky + format
-  // ==== helpers (sticky) – GANTI SEMUA WARNA KE VAR() ====
   const stickyLeftTH = (px) => ({
     position: "sticky",
     top: 0,
     left: px,
     background: "var(--table-header-bg)",
-    zIndex: 6, // header di atas sel
+    zIndex: 6,
     boxShadow: px
       ? "var(--table-sticky-shadow-left)"
       : "inset 0 -1px 0 var(--border)",

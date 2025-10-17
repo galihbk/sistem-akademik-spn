@@ -33,13 +33,27 @@ export default function RekapJasmani() {
 
   const [exporting, setExporting] = useState(false);
 
-  // ambil daftar angkatan
+  // ===== Jenis Pendidikan (di-set saat login)
+  const [jenis, setJenis] = useState(
+    () => localStorage.getItem("sa.jenis_pendidikan") || ""
+  );
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === "sa.jenis_pendidikan") setJenis(e.newValue || "");
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  // ambil daftar angkatan (ikut filter jenis)
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const token = await window.authAPI?.getToken?.();
-        const r = await fetch(`${API}/ref/angkatan`, {
+        const url = new URL(`${API}/ref/angkatan`);
+        if (jenis) url.searchParams.set("jenis", jenis);
+        const r = await fetch(url.toString(), {
           headers: {
             Accept: "application/json",
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -52,7 +66,7 @@ export default function RekapJasmani() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [jenis]);
 
   const angkatanEffective = angkatanFilter || angkatanFromShell || "";
 
@@ -61,12 +75,13 @@ export default function RekapJasmani() {
     if (q) u.searchParams.set("q", q);
     if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
     if (tahap !== "") u.searchParams.set("tahap", String(tahap));
+    if (jenis) u.searchParams.set("jenis", jenis);
     u.searchParams.set("page", String(page));
     u.searchParams.set("limit", String(limit));
     u.searchParams.set("sort_by", sortBy);
     u.searchParams.set("sort_dir", sortDir);
     return u.toString();
-  }, [q, page, limit, sortBy, sortDir, angkatanEffective, tahap]);
+  }, [q, page, limit, sortBy, sortDir, angkatanEffective, tahap, jenis]);
 
   useEffect(() => {
     let alive = true;
@@ -94,7 +109,7 @@ export default function RekapJasmani() {
 
   useEffect(() => {
     setPage(1);
-  }, [q, angkatanFilter, angkatanFromShell, sortBy, sortDir, tahap]);
+  }, [q, angkatanFilter, angkatanFromShell, sortBy, sortDir, tahap, jenis]);
 
   // ==== EXPORT (1 tombol, semua baris sesuai filter) ====
   function buildExportUrl() {
@@ -102,6 +117,7 @@ export default function RekapJasmani() {
     if (q) u.searchParams.set("q", q);
     if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
     if (tahap !== "") u.searchParams.set("tahap", String(tahap));
+    if (jenis) u.searchParams.set("jenis", jenis);
     u.searchParams.set("sort_by", sortBy);
     u.searchParams.set("sort_dir", sortDir);
     u.searchParams.set("all", "1");
@@ -241,8 +257,8 @@ export default function RekapJasmani() {
       const ss = String(ts.getSeconds()).padStart(2, "0");
       const fname = `rekap-jasmani${
         angkatanEffective ? `-angkatan-${angkatanEffective}` : ""
-      }${
-        tahap !== "" ? `-tahap-${tahap}` : ""
+      }${tahap !== "" ? `-tahap-${tahap}` : ""}${
+        jenis ? `-jenis-${jenis}` : ""
       }-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
 
       if (window.electronAPI?.download) {
@@ -298,8 +314,7 @@ export default function RekapJasmani() {
     }
   }
 
-  // sticky helpers
-  // ==== helpers (sticky) – GANTI SEMUA WARNA KE VAR() ====
+  // ==== helpers (sticky) – gunakan CSS var()
   const stickyLeftTH = (px) => ({
     position: "sticky",
     top: 0,
@@ -333,7 +348,6 @@ export default function RekapJasmani() {
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
   };
-
   const centerCell = { textAlign: "center", whiteSpace: "nowrap" };
 
   const fmtNum = (v) => (v == null || Number.isNaN(v) ? "-" : Number(v));
@@ -743,40 +757,3 @@ export default function RekapJasmani() {
     </>
   );
 }
-
-/* ===== util layout table ===== */
-const stickyTop = {
-  position: "sticky",
-  top: 0,
-  background: "#0b1220",
-  zIndex: 4,
-};
-const thBase = {
-  whiteSpace: "nowrap",
-  fontWeight: 700,
-  borderBottom: "1px solid #1f2937",
-};
-const numCell = {
-  textAlign: "right",
-  fontVariantNumeric: "tabular-nums",
-  whiteSpace: "nowrap",
-};
-const centerCell = { textAlign: "center", whiteSpace: "nowrap" };
-const stickyLeftTH = (px) => ({
-  position: "sticky",
-  top: 0,
-  left: px,
-  background: "#0b1220",
-  zIndex: 6,
-  boxShadow: px ? "6px 0 10px rgba(0,0,0,.35)" : "inset 0 -1px 0 #1f2937",
-});
-const stickyLeftTD = (px) => ({
-  position: "sticky",
-  left: px,
-  background: "#0b1220",
-  zIndex: 5,
-  boxShadow: px ? "6px 0 10px rgba(0,0,0,.35)" : "none",
-});
-const fmtNum = (v) => (v == null || Number.isNaN(v) ? "-" : Number(v));
-const fmtRank = (r) =>
-  r?.pos != null && r?.total ? `${r.pos}/${r.total}` : "-";

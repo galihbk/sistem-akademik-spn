@@ -40,6 +40,21 @@ function normalizeDate(input) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+/** Validasi "magic bytes" PDF: harus berawalan "%PDF-" */
+async function isActualPdf(absPath) {
+  try {
+    const fh = await fs.promises.open(absPath, "r");
+    try {
+      const { buffer, bytesRead } = await fh.read(Buffer.alloc(5), 0, 5, 0);
+      return bytesRead >= 5 && buffer.toString("utf8", 0, 5) === "%PDF-";
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
 /**
  * POST /upload/:kind
  * FormData: siswa_id, judul, tanggal?, file
@@ -67,6 +82,23 @@ async function uploadPdf(req, res) {
     safeUnlink(file.path);
     return res.status(400).json({ message: "Judul wajib diisi." });
   }
+
+  // Pastikan file benar-benar PDF (bukan cuma mime)
+  const absUploaded = path.isAbsolute(file.path)
+    ? file.path
+    : path.resolve(PROJECT_ROOT, file.path);
+  const looksPdf = await isActualPdf(absUploaded);
+  if (!looksPdf) {
+    safeUnlink(file.path);
+    return res.status(400).json({ message: "File bukan PDF yang valid." });
+  }
+
+  // (Opsional) batasi ukuran file
+  // const maxBytes = 25 * 1024 * 1024; // 25MB
+  // if (file.size > maxBytes) {
+  //   safeUnlink(file.path);
+  //   return res.status(413).json({ message: "File terlalu besar (>25MB)." });
+  // }
 
   // Pastikan siswa_id valid
   try {
@@ -186,4 +218,46 @@ function listDocs(kind) {
   };
 }
 
-module.exports = { uploadPdf, deleteDoc, listDocs };
+/**
+ * GET /download?path=relative/path/dari/uploads/...
+ * Kirim file PDF secara streaming dengan proteksi path traversal.
+ */
+async function download(req, res) {
+  try {
+    const raw = String(req.query.path || "").replace(/^\/+/, "");
+    if (!raw) return res.status(400).send("param ?path kosong");
+
+    const abs = path.resolve(PROJECT_ROOT, raw);
+
+    // Wajib berada di dalam UPLOAD_DIR
+    const inside = abs === UPLOAD_DIR || abs.startsWith(UPLOAD_DIR + path.sep);
+    if (!inside) return res.status(400).send("path di luar direktori upload");
+
+    await fs.promises.access(abs, fs.constants.R_OK).catch(() => {
+      throw Object.assign(new Error("File tidak ditemukan"), {
+        code: "ENOENT",
+      });
+    });
+
+    const filename = path.basename(abs);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
+    );
+
+    const stream = fs.createReadStream(abs);
+    stream.on("error", (e) => {
+      console.error("[download] stream error:", e);
+      if (!res.headersSent) res.status(500).send("Gagal mengirim file.");
+    });
+    stream.pipe(res);
+  } catch (e) {
+    if (e.code === "ENOENT")
+      return res.status(404).send("File tidak ditemukan");
+    console.error("[download] error:", e);
+    return res.status(500).send("Gagal memproses unduhan");
+  }
+}
+
+module.exports = { uploadPdf, deleteDoc, listDocs, download };

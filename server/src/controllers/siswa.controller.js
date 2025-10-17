@@ -132,6 +132,7 @@ async function list(req, res) {
   try {
     const q = (req.query.q || "").trim().toLowerCase();
     const angkatan = (req.query.angkatan || "").trim();
+    const jenis = (req.query.jenis || req.query.jenis_pendidikan || "").trim(); // <== TAMBAH: jenis pendidikan
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const limit = Math.min(
       Math.max(parseInt(req.query.limit || "20", 10), 1),
@@ -161,6 +162,10 @@ async function list(req, res) {
       params.push(angkatan);
       where += ` AND TRIM(kelompok_angkatan) = TRIM($${params.length})`;
     }
+    if (jenis) {
+      params.push(jenis);
+      where += ` AND TRIM(COALESCE(jenis_pendidikan,'')) = TRIM($${params.length})`; // <== TAMBAH: filter jenis_pendidikan
+    }
 
     const sqlData = `
       SELECT id, nosis, nama, kelompok_angkatan, nik
@@ -185,6 +190,7 @@ async function list(req, res) {
       sort_dir: sortDir,
       q,
       angkatan,
+      jenis, // echo
     });
   } catch (e) {
     console.error("[siswa.list]", e);
@@ -265,24 +271,19 @@ async function listPrestasi(req, res) {
 
 /** GET /siswa/nik/:nik/jasmani
  *  Sumber utama: VIEW v_jasmani_itemized
- *  Perbaikan:
- *   - bila field tahap di view masih NULL (data lama), kita isi otomatis
- *     berdasarkan urutan waktu (created_at/updated_at) per jasmani_spn_id.
- *   - tetap ada fallback ke tabel jasmani_spn (pecah item) jika VIEW tidak ada/errored.
+ *  (…tetap seperti kode kamu)
  */
 async function listJasmani(req, res) {
   try {
     const nik = (req.params.nik || "").trim();
     if (!nik) return res.json([]);
 
-    // ambil siswa_id
     const r = await pool.query(`SELECT id FROM siswa WHERE nik = $1 LIMIT 1`, [
       nik,
     ]);
     if (!r.rowCount) return res.json([]);
     const siswaId = r.rows[0].id;
 
-    // cek view
     const chk = await pool.query(
       `SELECT to_regclass('public.v_jasmani_itemized') AS tname`
     );
@@ -290,7 +291,6 @@ async function listJasmani(req, res) {
 
     if (hasView) {
       try {
-        // ambil itemized
         const { rows } = await pool.query(
           `
           SELECT
@@ -317,31 +317,25 @@ async function listJasmani(req, res) {
 
         if (!rows.length) return res.json([]);
 
-        // ====== NORMALISASI TAHAP (AUTO FILL BILA NULL) ======
-        // 1) kumpulkan waktu per jasmani_spn_id (pakai timestamp terbaru dari cluster tsb)
-        const spnTime = new Map(); // jasmani_spn_id -> millis
+        const spnTime = new Map();
         for (const r of rows) {
-          const t = r.updated_at || r.created_at || null; // Date dari PG driver -> js Date
+          const t = r.updated_at || r.created_at || null;
           const ms = t ? new Date(t).getTime() : 0;
           const prev = spnTime.get(r.jasmani_spn_id) ?? -1;
-          // pakai waktu terbesar (terbaru) sebagai representasi record itu
           if (ms > prev) spnTime.set(r.jasmani_spn_id, ms);
         }
 
-        // 2) urutkan unique jasmani_spn_id berdasar waktu (lama -> baru) agar tahap 1,2,3...
         const orderedSpn = Array.from(spnTime.entries())
           .sort((a, b) => a[1] - b[1])
           .map(([id]) => id);
 
-        // 3) buat nomor tahap otomatis per urutan di atas (mulai 1)
-        const autoTahap = new Map(); // jasmani_spn_id -> tahapAuto
+        const autoTahap = new Map();
         orderedSpn.forEach((id, idx) => autoTahap.set(id, idx + 1));
 
-        // 4) sematkan tahap: jika null/undefined/0, pakai auto
         const out = rows.map((x) => {
           let tahap = x.tahap;
           if (
-            tahap == null || // null/undefined
+            tahap == null ||
             (typeof tahap === "number" && !Number.isFinite(tahap)) ||
             (typeof tahap === "string" && tahap.trim() === "")
           ) {
@@ -356,11 +350,9 @@ async function listJasmani(req, res) {
         return res.json(out);
       } catch (err) {
         console.error("[listJasmani:view-error]", err?.message || err);
-        // jatuh ke fallback di bawah
       }
     }
 
-    // ====== FALLBACK (view tidak ada / error): ambil latest jasmani_spn, pecah jadi item ======
     const q2 = await pool.query(
       `
       SELECT *
@@ -407,7 +399,7 @@ async function listJasmani(req, res) {
       ...x,
       siswa_id: siswaId,
       jasmani_spn_id: j.id,
-      tahap: j.tahap ?? 1, // fallback: kalau null, anggap 1
+      tahap: j.tahap ?? 1,
       created_at: time,
       updated_at: time,
     }));
@@ -420,13 +412,11 @@ async function listJasmani(req, res) {
 }
 
 /** GET /siswa/nik/:nik/jasmani_overview */
-// ================= JASMANI OVERVIEW (REPLACE THIS FUNCTION) =================
 async function jasmaniOverviewByNik(req, res) {
   const client = req.app.get("db") || pool;
   const { nik } = req.params;
 
   try {
-    // Ambil siswa-nya dulu
     const qSiswa = `
       SELECT
         s.id AS siswa_id,
@@ -445,7 +435,6 @@ async function jasmaniOverviewByNik(req, res) {
     }
     const siswa = rSiswa.rows[0];
 
-    // Ranking berdasarkan nilai_akhir terbaru per siswa dalam angkatan sama
     const qRank = `
       WITH me AS (
         SELECT
@@ -471,14 +460,8 @@ async function jasmaniOverviewByNik(req, res) {
       latest_js_raw AS (
         SELECT DISTINCT ON (j.siswa_id)
           j.siswa_id,
-          /* Buang karakter non-angka dan jadikan NULL jika string kosong */
           NULLIF(
-            regexp_replace(
-              COALESCE(j.nilai_akhir::text, ''),
-              '[^0-9,\\.\\-]',
-              '',
-              'g'
-            ),
+            regexp_replace(COALESCE(j.nilai_akhir::text, ''), '[^0-9,\\.\\-]', '', 'g'),
             ''
           ) AS cleaned,
           COALESCE(j.updated_at, j.created_at) AS ts
@@ -490,9 +473,7 @@ async function jasmaniOverviewByNik(req, res) {
         SELECT
           siswa_id,
           CASE
-            /* hanya cast kalau formatnya jelas angka (boleh koma/titik desimal) */
-            WHEN cleaned IS NOT NULL
-             AND cleaned ~ '^-?[0-9]+([\\.,][0-9]+)?$'
+            WHEN cleaned IS NOT NULL AND cleaned ~ '^-?[0-9]+([\\.,][0-9]+)?$'
               THEN REPLACE(cleaned, ',', '.')::double precision
             ELSE NULL::double precision
           END AS score,
@@ -505,9 +486,7 @@ async function jasmaniOverviewByNik(req, res) {
           sa.nik,
           sa.batalion,
           sa.angkatan,
-          /* kompi = huruf pertama TON (uppercase), aman untuk NULL/empty */
           UPPER(NULLIF(regexp_replace(sa.ton, '[^A-Za-z].*', ''), '')) AS kompi,
-          /* pleton = label TON utuh (string, tidak di-cast int) */
           UPPER(COALESCE(sa.ton, '')) AS pleton,
           lj.score
         FROM same_angkatan sa
@@ -518,13 +497,10 @@ async function jasmaniOverviewByNik(req, res) {
           *,
           RANK()  OVER (ORDER BY score DESC NULLS LAST)                                 AS r_global,
           COUNT(*) FILTER (WHERE score IS NOT NULL) OVER ()                              AS t_global,
-
           RANK()  OVER (PARTITION BY batalion            ORDER BY score DESC NULLS LAST) AS r_batalion,
           COUNT(*) FILTER (WHERE score IS NOT NULL) OVER (PARTITION BY batalion)         AS t_batalion,
-
           RANK()  OVER (PARTITION BY kompi               ORDER BY score DESC NULLS LAST) AS r_kompi,
           COUNT(*) FILTER (WHERE score IS NOT NULL) OVER (PARTITION BY kompi)            AS t_kompi,
-
           RANK()  OVER (PARTITION BY kompi, pleton       ORDER BY score DESC NULLS LAST) AS r_pleton,
           COUNT(*) FILTER (WHERE score IS NOT NULL) OVER (PARTITION BY kompi, pleton)    AS t_pleton
         FROM joined

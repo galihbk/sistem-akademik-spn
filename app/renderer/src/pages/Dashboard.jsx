@@ -216,7 +216,7 @@ export default function Dashboard() {
   );
   const [opts, setOpts] = useState([]);
 
-  // ==> NEW: tampilkan jenis pendidikan yang aktif
+  // Jenis Pendidikan aktif (disimpan saat login)
   const [jenis, setJenis] = useState(
     () => localStorage.getItem("sa.jenis_pendidikan") || ""
   );
@@ -235,9 +235,10 @@ export default function Dashboard() {
     try {
       setErr("");
       const token = await window.authAPI.getToken();
+      const jp = localStorage.getItem("sa.jenis_pendidikan") || "";
       const [s, a] = await Promise.all([
-        getSummary(token, angkatan),
-        getRecentActivity(token, angkatan),
+        getSummary(token, angkatan, jp),
+        getRecentActivity(token, angkatan, jp),
       ]);
       setSum(s);
       setAct(a);
@@ -253,7 +254,10 @@ export default function Dashboard() {
     (async () => {
       try {
         const token = await window.authAPI.getToken();
-        const res = await fetch(`${API}/ref/angkatan`, {
+        const jp = localStorage.getItem("sa.jenis_pendidikan") || "";
+        const url = new URL(`${API}/ref/angkatan`);
+        if (jp) url.searchParams.set("jenis", jp);
+        const res = await fetch(url.toString(), {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         const data = await res.json();
@@ -273,11 +277,18 @@ export default function Dashboard() {
   // sinkron dengan perubahan Jenis Pendidikan di tab/halaman lain
   useEffect(() => {
     const onStorage = (e) => {
-      if (e.key === "sa.jenis_pendidikan") setJenis(e.newValue || "");
+      if (e.key === "sa.jenis_pendidikan") {
+        setJenis(e.newValue || "");
+      }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
+
+  // reload saat jenis berubah (misalnya user logout-login lagi)
+  useEffect(() => {
+    load();
+  }, [jenis]);
 
   // auto refresh
   useEffect(() => {
@@ -286,7 +297,7 @@ export default function Dashboard() {
     if (!autoRefresh) return;
     const id = setInterval(load, Math.max(5000, intervalMs));
     return () => clearInterval(id);
-  }, [autoRefresh, intervalMs, angkatan]);
+  }, [autoRefresh, intervalMs, angkatan, jenis]);
 
   const pdf30Bk = sum?.pdf_last30?.find((x) => x.tipe === "bk")?.total ?? 0;
   const pdf30Pel =

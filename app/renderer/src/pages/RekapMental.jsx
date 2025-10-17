@@ -32,13 +32,28 @@ export default function RekapMental() {
 
   const [weekColumns, setWeekColumns] = useState([]);
 
-  // opsi angkatan
+  // === Jenis Pendidikan aktif (disimpan saat login)
+  const [jenis, setJenis] = useState(
+    () => localStorage.getItem("sa.jenis_pendidikan") || ""
+  );
+  // sync jika berubah di tab lain
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === "sa.jenis_pendidikan") setJenis(e.newValue || "");
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  // opsi angkatan (ikut filter jenis)
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const token = await window.authAPI?.getToken?.();
-        const r = await fetch(`${API}/ref/angkatan`, {
+        const url = new URL(`${API}/ref/angkatan`);
+        if (jenis) url.searchParams.set("jenis", jenis);
+        const r = await fetch(url.toString(), {
           headers: {
             Accept: "application/json",
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -51,7 +66,7 @@ export default function RekapMental() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [jenis]);
 
   const angkatanEffective = angkatanFilter || angkatanFromShell || "";
 
@@ -60,12 +75,13 @@ export default function RekapMental() {
     const u = new URL(`${API}/mental/rekap`);
     if (q) u.searchParams.set("q", q);
     if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
+    if (jenis) u.searchParams.set("jenis", jenis);
     u.searchParams.set("page", String(page));
     u.searchParams.set("limit", String(limit));
     u.searchParams.set("sort_by", sortBy);
     u.searchParams.set("sort_dir", sortDir);
     return u.toString();
-  }, [q, page, limit, sortBy, sortDir, angkatanEffective]);
+  }, [q, page, limit, sortBy, sortDir, angkatanEffective, jenis]);
 
   // fetch data
   useEffect(() => {
@@ -107,15 +123,15 @@ export default function RekapMental() {
   // reset page saat filter/sort berubah
   useEffect(() => {
     setPage(1);
-  }, [q, angkatanFilter, angkatanFromShell, sortBy, sortDir]);
+  }, [q, angkatanFilter, angkatanFromShell, sortBy, sortDir, jenis]);
 
-  // ==== helpers (sticky) – GANTI SEMUA WARNA KE VAR() ====
+  // ==== helpers (sticky)
   const stickyLeftTH = (px) => ({
     position: "sticky",
     top: 0,
     left: px,
     background: "var(--table-header-bg)",
-    zIndex: 6, // header di atas sel
+    zIndex: 6,
     boxShadow: px
       ? "var(--table-sticky-shadow-left)"
       : "inset 0 -1px 0 var(--border)",
@@ -151,10 +167,11 @@ export default function RekapMental() {
 
   // ---------- EXPORT (single button, semua hasil filter) ----------
   function buildExportExcelUrl() {
-    // GET /export/mental_rekap.xlsx?q=&angkatan=&sort_by=&sort_dir=&all=1
+    // GET /export/mental_rekap.xlsx?q=&angkatan=&jenis=&sort_by=&sort_dir=&all=1
     const u = new URL(`${API}/export/mental_rekap.xlsx`);
     if (q) u.searchParams.set("q", q);
     if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
+    if (jenis) u.searchParams.set("jenis", jenis);
     u.searchParams.set("sort_by", sortBy);
     u.searchParams.set("sort_dir", sortDir);
     u.searchParams.set("all", "1");
@@ -284,10 +301,10 @@ export default function RekapMental() {
       const labelAngkatan = angkatanEffective
         ? `-angkatan-${angkatanEffective}`
         : "";
-      const fname = `rekap-mental${labelAngkatan}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
+      const labelJenis = jenis ? `-jenis-${jenis}` : "";
+      const fname = `rekap-mental${labelAngkatan}${labelJenis}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
 
       if (window.electronAPI?.download) {
-        // info lokasi default (jika ada method-nya)
         const info = await window.electronAPI
           .getDefaultDownloadsDir?.()
           .catch(() => null);
@@ -302,7 +319,6 @@ export default function RekapMental() {
           duration: 0,
         });
 
-        // _opsional_: sebagian instalasi punya signature (url, filename)
         const res = await (window.electronAPI.download.length >= 2
           ? window.electronAPI.download(url, fname)
           : window.electronAPI.download(url));
@@ -318,7 +334,6 @@ export default function RekapMental() {
           duration: SUCCESS_CLOSE_MS,
         });
       } else {
-        // browser/dev
         await downloadViaFetchWithProgress(url, fname);
       }
     } catch (e) {

@@ -1,10 +1,16 @@
 // src/controllers/stats.controller.js
-const pool = require('../db/pool');
+const pool = require("../db/pool");
 
 const TREND_DAYS = 7;
 
 function sanitizeAngkatan(val) {
-  if (typeof val !== 'string') return null;
+  if (typeof val !== "string") return null;
+  const v = val.trim();
+  return v.length ? v : null;
+}
+
+function sanitizeJenis(val) {
+  if (typeof val !== "string") return null;
   const v = val.trim();
   return v.length ? v : null;
 }
@@ -12,9 +18,26 @@ function sanitizeAngkatan(val) {
 async function summary(req, res) {
   try {
     const qAngkatan = sanitizeAngkatan(req.query.angkatan);
+    const qJenis = sanitizeJenis(req.query.jenis || req.query.jenis_pendidikan);
 
-    // ===== total siswa & tanpa foto (opsional filter angkatan) =====
-    const whereSiswa = qAngkatan ? `WHERE COALESCE(NULLIF(TRIM(kelompok_angkatan), ''), '') = $1` : '';
+    // ===== WHERE dinamis untuk tabel siswa =====
+    const ws = [];
+    const wp = [];
+    if (qAngkatan) {
+      ws.push(
+        `COALESCE(NULLIF(TRIM(kelompok_angkatan), ''), '') = $${wp.length + 1}`
+      );
+      wp.push(qAngkatan);
+    }
+    if (qJenis) {
+      ws.push(
+        `COALESCE(NULLIF(TRIM(jenis_pendidikan), ''), '') = $${wp.length + 1}`
+      );
+      wp.push(qJenis);
+    }
+    const whereSiswa = ws.length ? `WHERE ${ws.join(" AND ")}` : "";
+
+    // ===== total siswa & tanpa foto =====
     const { rows: rSiswa } = await pool.query(
       `
       SELECT
@@ -23,16 +46,20 @@ async function summary(req, res) {
       FROM siswa
       ${whereSiswa}
       `,
-      qAngkatan ? [qAngkatan] : []
+      wp
     );
 
-    // ===== distribusi angkatan (tanpa pakai alias di ORDER BY) =====
+    // ===== distribusi angkatan =====
     const { rows: rAngkatan } = await pool.query(
       `
+      WITH src AS (
+        SELECT * FROM siswa
+        ${whereSiswa}
+      )
       SELECT
         COALESCE(NULLIF(TRIM(kelompok_angkatan),''), '(Tidak diisi)') AS angkatan,
         COUNT(*)::int AS total
-      FROM siswa
+      FROM src
       GROUP BY 1
       ORDER BY
         CASE
@@ -40,22 +67,38 @@ async function summary(req, res) {
           ELSE 0
         END,
         COALESCE(NULLIF(TRIM(kelompok_angkatan),''), '(Tidak diisi)')
-      `
+      `,
+      wp
     );
 
-    // ===== total PDF BK & Pelanggaran (opsional filter angkatan lewat relasi siswa) =====
-    // Jika mau, join ke siswa agar bisa filter per angkatan
+    // ===== total PDF BK & Pelanggaran (filter via siswa) =====
     const pdfParams = [];
-    const pdfWhereBk = qAngkatan
-      ? (pdfParams.push(qAngkatan), `WHERE EXISTS (SELECT 1 FROM siswa s WHERE s.id=bk.siswa_id AND COALESCE(NULLIF(TRIM(s.kelompok_angkatan),''), '') = $1)`)
-      : '';
-    const pdfWherePel = qAngkatan
-      ? (pdfParams.push(qAngkatan), `WHERE EXISTS (SELECT 1 FROM siswa s WHERE s.id=pelanggaran.siswa_id AND COALESCE(NULLIF(TRIM(s.kelompok_angkatan),''), '') = $2)`)
-      : '';
+    const conds = [];
+    if (qAngkatan) {
+      pdfParams.push(qAngkatan);
+      conds.push(
+        `COALESCE(NULLIF(TRIM(s.kelompok_angkatan),''), '') = $${pdfParams.length}`
+      );
+    }
+    if (qJenis) {
+      pdfParams.push(qJenis);
+      conds.push(
+        `COALESCE(NULLIF(TRIM(s.jenis_pendidikan),''), '') = $${pdfParams.length}`
+      );
+    }
+    const existsS = conds.length ? ` AND ${conds.join(" AND ")}` : "";
+    const pdfWhereBk = `WHERE EXISTS (SELECT 1 FROM siswa s WHERE s.id=bk.siswa_id${existsS})`;
+    const pdfWherePel = `WHERE EXISTS (SELECT 1 FROM siswa s WHERE s.id=pelanggaran.siswa_id${existsS})`;
 
     const [{ rows: rBk }, { rows: rPel }] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM bk ${pdfWhereBk}`, pdfParams.length ? [pdfParams[0]] : []),
-      pool.query(`SELECT COUNT(*)::int AS total FROM pelanggaran ${pdfWherePel}`, pdfParams.length === 2 ? [pdfParams[1]] : []),
+      pool.query(
+        `SELECT COUNT(*)::int AS total FROM bk ${pdfWhereBk}`,
+        pdfParams
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS total FROM pelanggaran ${pdfWherePel}`,
+        pdfParams
+      ),
     ]);
 
     // ===== info import terakhir =====
@@ -72,13 +115,25 @@ async function summary(req, res) {
       LIMIT 1
     `);
 
-    // ===== tren 7 hari (siswa baru per hari, hormati filter angkatan) =====
+    // ===== tren 7 hari (hormati filter) =====
     const trendParams = [];
-    let trendWhere = '';
+    const trendConds = [];
     if (qAngkatan) {
       trendParams.push(qAngkatan);
-      trendWhere = `AND COALESCE(NULLIF(TRIM(s.kelompok_angkatan), ''), '') = $1`;
+      trendConds.push(
+        `COALESCE(NULLIF(TRIM(s.kelompok_angkatan), ''), '') = $${trendParams.length}`
+      );
     }
+    if (qJenis) {
+      trendParams.push(qJenis);
+      trendConds.push(
+        `COALESCE(NULLIF(TRIM(s.jenis_pendidikan), ''), '') = $${trendParams.length}`
+      );
+    }
+    const trendWhere = trendConds.length
+      ? `AND ${trendConds.join(" AND ")}`
+      : "";
+
     const { rows: rTrend } = await pool.query(
       `
       WITH days AS (
@@ -102,24 +157,36 @@ async function summary(req, res) {
       trendParams
     );
 
-    // ===== ringkasan PDF 30 hari terakhir (opsional filter angkatan) =====
+    // ===== ringkasan PDF 30 hari terakhir =====
     const pdf30Params = [];
-    let subWhereBk = `created_at >= NOW() - INTERVAL '30 day'`;
-    let subWherePel = `created_at >= NOW() - INTERVAL '30 day'`;
+    const pdf30Conds = [];
     if (qAngkatan) {
-      pdf30Params.push(qAngkatan, qAngkatan);
-      subWhereBk += ` AND EXISTS (SELECT 1 FROM siswa s WHERE s.id=bk.siswa_id AND COALESCE(NULLIF(TRIM(s.kelompok_angkatan),''), '') = $1)`;
-      subWherePel += ` AND EXISTS (SELECT 1 FROM siswa s WHERE s.id=pelanggaran.siswa_id AND COALESCE(NULLIF(TRIM(s.kelompok_angkatan),''), '') = $2)`;
+      pdf30Params.push(qAngkatan);
+      pdf30Conds.push(
+        `COALESCE(NULLIF(TRIM(s.kelompok_angkatan),''), '') = $${pdf30Params.length}`
+      );
     }
+    if (qJenis) {
+      pdf30Params.push(qJenis);
+      pdf30Conds.push(
+        `COALESCE(NULLIF(TRIM(s.jenis_pendidikan),''), '') = $${pdf30Params.length}`
+      );
+    }
+    const condExpr = pdf30Conds.length
+      ? ` AND ${pdf30Conds.join(" AND ")}`
+      : "";
+
     const { rows: rPdf30 } = await pool.query(
       `
       SELECT 'bk' AS tipe, COUNT(*)::int AS total
       FROM bk
-      WHERE ${subWhereBk}
+      WHERE created_at >= NOW() - INTERVAL '30 day'
+        AND EXISTS (SELECT 1 FROM siswa s WHERE s.id=bk.siswa_id${condExpr})
       UNION ALL
       SELECT 'pelanggaran' AS tipe, COUNT(*)::int AS total
       FROM pelanggaran
-      WHERE ${subWherePel}
+      WHERE created_at >= NOW() - INTERVAL '30 day'
+        AND EXISTS (SELECT 1 FROM siswa s WHERE s.id=pelanggaran.siswa_id${condExpr})
       `,
       pdf30Params
     );
@@ -133,49 +200,37 @@ async function summary(req, res) {
       last_import: rLast[0] || null,
       trend_7d: rTrend,
       pdf_last30: rPdf30,
-      server_status: 'Online',
+      server_status: "Online",
     });
   } catch (e) {
-    console.error('[stats.summary]', e);
-    res.status(500).json({ message: 'Failed to get summary' });
+    console.error("[stats.summary]", e);
+    res.status(500).json({ message: "Failed to get summary" });
   }
 }
 
 async function recentActivity(req, res) {
   try {
-    const qAngkatan = sanitizeAngkatan(req.query.angkatan);
-    let rows;
+    // Disimpan untuk konsistensi query param; saat ini belum dipakai filter ke audit_log
+    const _qAngkatan = sanitizeAngkatan(req.query.angkatan);
+    const _qJenis = sanitizeJenis(
+      req.query.jenis || req.query.jenis_pendidikan
+    );
 
-    if (qAngkatan) {
-      // Jika ingin filter aktivitas via target siswa, contoh sederhana:
-      // (Anda bisa sesuaikan berdasarkan format kolom target/hasil)
-      rows = (
-        await pool.query(
-          `
-          SELECT id, admin, aksi, target, hasil, created_at
-          FROM audit_log
-          ORDER BY created_at DESC
-          LIMIT 10
-          `
-        )
-      ).rows;
-    } else {
-      rows = (
-        await pool.query(
-          `
-          SELECT id, admin, aksi, target, hasil, created_at
-          FROM audit_log
-          ORDER BY created_at DESC
-          LIMIT 10
-          `
-        )
-      ).rows;
-    }
+    const rows = (
+      await pool.query(
+        `
+        SELECT id, admin, aksi, target, hasil, created_at
+        FROM audit_log
+        ORDER BY created_at DESC
+        LIMIT 10
+        `
+      )
+    ).rows;
 
     res.json({ items: rows });
   } catch (e) {
-    console.error('[stats.recent]', e);
-    res.status(500).json({ message: 'Failed to get activity' });
+    console.error("[stats.recent]", e);
+    res.status(500).json({ message: "Failed to get activity" });
   }
 }
 
@@ -189,8 +244,8 @@ async function latestLogs(_req, res) {
     );
     res.json(rows);
   } catch (e) {
-    console.error('[stats.latestLogs]', e);
-    res.status(500).json({ error: 'Gagal ambil log terbaru' });
+    console.error("[stats.latestLogs]", e);
+    res.status(500).json({ error: "Gagal ambil log terbaru" });
   }
 }
 

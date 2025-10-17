@@ -171,7 +171,8 @@ exports.rekap = async (req, res) => {
   try {
     const q = (req.query.q || "").trim().toLowerCase();
     const angkatan = (req.query.angkatan || "").trim();
-    const mapel = (req.query.mapel || "").trim(); // opsional filter mapel
+    const mapel = (req.query.mapel || "").trim();
+    const jenis = (req.query.jenis || req.query.jenis_pendidikan || "").trim(); // ← Jenis Pendidikan
 
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const limit = Math.min(
@@ -191,18 +192,30 @@ exports.rekap = async (req, res) => {
       ? req.query.sort_dir.toLowerCase()
       : "asc";
 
+    // ---- WHERE untuk siswa (count + page CTE match)
     const params = [];
     let whereS = "WHERE 1=1";
     if (q) {
       params.push(`%${q}%`);
-      whereS += ` AND (LOWER(s.nama) LIKE $${params.length} OR LOWER(s.nosis) LIKE $${params.length})`;
-    }
-    if (angkatan) {
-      params.push(angkatan);
-      whereS += ` AND TRIM(s.kelompok_angkatan) = TRIM($${params.length})`;
+      const idx = params.length;
+      whereS += ` AND (LOWER(s.nama) LIKE $${idx} OR LOWER(s.nosis) LIKE $${idx})`;
     }
 
-    // hitung total siswa yang match (berdasarkan siswa — bukan mapel)
+    let angkatanIdx = null;
+    if (angkatan) {
+      params.push(angkatan);
+      angkatanIdx = params.length;
+      whereS += ` AND TRIM(s.kelompok_angkatan) = TRIM($${angkatanIdx})`;
+    }
+
+    let jenisIdx = null;
+    if (jenis) {
+      params.push(jenis);
+      jenisIdx = params.length;
+      whereS += ` AND TRIM(COALESCE(s.jenis_pendidikan,'')) = TRIM($${jenisIdx})`;
+    }
+
+    // ---- hitung total siswa match
     const { rows: cntRows } = await pool.query(
       `SELECT COUNT(*)::int AS total
        FROM siswa s
@@ -211,7 +224,10 @@ exports.rekap = async (req, res) => {
     );
     const total = cntRows?.[0]?.total ?? 0;
 
-    // ambil page of siswa
+    // ---- siapkan index placeholder utk mapel (ditambahkan paling akhir)
+    const mapelIdx = mapel ? params.length + 1 : null;
+
+    // ---- Query page (rekap + rank)
     const pageSql = `
       WITH match AS (
         SELECT
@@ -239,7 +255,7 @@ exports.rekap = async (req, res) => {
           END AS nilai_num
         FROM mapel m
         JOIN match mm ON mm.id = m.siswa_id
-        ${mapel ? `WHERE m.mapel = $${params.length + 1}` : ""}
+        ${mapel ? `WHERE m.mapel = $${mapelIdx}` : ""}
       ),
       agg AS (
         SELECT
@@ -257,7 +273,7 @@ exports.rekap = async (req, res) => {
         GROUP BY mm.id, mm.nosis, mm.nama, mm.kelompok_angkatan, mm.batalion, mm.ton, mm.kompi, mm.pleton
       ),
       base AS (
-        -- basis ranking utk 1 angkatan (opsional)
+        -- basis ranking utk 1 angkatan/jenis (opsional)
         SELECT
           s.id, s.batalion,
           UPPER(NULLIF(regexp_replace(s.ton, '[^A-Za-z].*', ''), '')) AS kompi,
@@ -274,13 +290,22 @@ exports.rekap = async (req, res) => {
         FROM siswa s
         LEFT JOIN mapel m ON m.siswa_id = s.id
         ${
-          angkatan
-            ? `WHERE TRIM(s.kelompok_angkatan) = TRIM($${params.length})`
+          angkatan || jenis
+            ? `WHERE ${[
+                angkatan
+                  ? `TRIM(s.kelompok_angkatan) = TRIM($${angkatanIdx})`
+                  : null,
+                jenis
+                  ? `TRIM(COALESCE(s.jenis_pendidikan,'')) = TRIM($${jenisIdx})`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" AND ")}`
             : ""
         }
         ${
           mapel
-            ? `${angkatan ? "AND" : "WHERE"} m.mapel = $${params.length + 1}`
+            ? `${angkatan || jenis ? "AND" : "WHERE"} m.mapel = $${mapelIdx}`
             : ""
         }
         GROUP BY s.id, s.batalion, s.ton
@@ -333,26 +358,33 @@ exports.rekap = async (req, res) => {
       weeks: r.weeks || {},
     }));
 
-    // daftar pertemuan yg ada utk filter saat ini
+    // ---- daftar pertemuan (ikut filter angkatan/jenis/mapel)
+    const weeksConds = [];
+    const weeksParams = [];
+    if (angkatan) {
+      weeksParams.push(angkatan);
+      weeksConds.push(`TRIM(s.kelompok_angkatan)=TRIM($${weeksParams.length})`);
+    }
+    if (jenis) {
+      weeksParams.push(jenis);
+      weeksConds.push(
+        `TRIM(COALESCE(s.jenis_pendidikan,''))=TRIM($${weeksParams.length})`
+      );
+    }
+    if (mapel) {
+      weeksParams.push(mapel);
+      weeksConds.push(`m.mapel = $${weeksParams.length}`);
+    }
+
     const weeksSql = `
       SELECT ARRAY(
         SELECT DISTINCT m.pertemuan
         FROM mapel m
         JOIN siswa s ON s.id = m.siswa_id
-        ${angkatan || mapel || q ? "WHERE 1=1" : ""}
-        ${angkatan ? ` AND TRIM(s.kelompok_angkatan)=TRIM($1)` : ""}
-        ${mapel ? ` AND m.mapel = $${angkatan ? 2 : 1}` : ""}
+        ${weeksConds.length ? `WHERE ${weeksConds.join(" AND ")}` : ""}
         ORDER BY m.pertemuan
       ) AS weeks;
     `;
-    const weeksParams =
-      angkatan && mapel
-        ? [angkatan, mapel]
-        : angkatan
-        ? [angkatan]
-        : mapel
-        ? [mapel]
-        : [];
     const weeksArr =
       (await pool.query(weeksSql, weeksParams)).rows[0]?.weeks || [];
 
@@ -366,6 +398,7 @@ exports.rekap = async (req, res) => {
       q,
       angkatan,
       mapel,
+      jenis,
       weeks: weeksArr,
     });
   } catch (e) {

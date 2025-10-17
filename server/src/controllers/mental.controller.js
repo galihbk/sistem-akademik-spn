@@ -1,9 +1,12 @@
+// controllers/mental.controller.js
 const pool = require("../db/pool");
 
 async function rekap(req, res) {
   try {
     const q = (req.query.q || "").trim().toLowerCase();
     const angkatan = (req.query.angkatan || "").trim();
+    const jenis = (req.query.jenis || req.query.jenis_pendidikan || "").trim();
+
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const limit = Math.min(
       Math.max(parseInt(req.query.limit || "20", 10), 1),
@@ -22,23 +25,37 @@ async function rekap(req, res) {
       ? req.query.sort_dir.toLowerCase()
       : "asc";
 
+    // WHERE dinamis utk siswa (count + page CTE + weeks)
     const params = [];
     let where = "WHERE 1=1";
     if (q) {
       params.push(`%${q}%`);
-      where += ` AND (LOWER(s.nama) LIKE $${params.length} OR LOWER(s.nosis) LIKE $${params.length})`;
-    }
-    if (angkatan) {
-      params.push(angkatan);
-      where += ` AND TRIM(s.kelompok_angkatan) = TRIM($${params.length})`;
+      const idx = params.length;
+      where += ` AND (LOWER(s.nama) LIKE $${idx} OR LOWER(s.nosis) LIKE $${idx})`;
     }
 
+    let angkatanIdx = null;
+    if (angkatan) {
+      params.push(angkatan);
+      angkatanIdx = params.length;
+      where += ` AND TRIM(s.kelompok_angkatan) = TRIM($${angkatanIdx})`;
+    }
+
+    let jenisIdx = null;
+    if (jenis) {
+      params.push(jenis);
+      jenisIdx = params.length;
+      where += ` AND TRIM(COALESCE(s.jenis_pendidikan,'')) = TRIM($${jenisIdx})`;
+    }
+
+    // total siswa yang match
     const { rows: cntRows } = await pool.query(
       `SELECT COUNT(*)::int AS total FROM siswa s ${where};`,
       params
     );
     const total = cntRows?.[0]?.total ?? 0;
 
+    // page data
     const pageSql = `
       WITH match AS (
         SELECT
@@ -70,7 +87,6 @@ async function rekap(req, res) {
         SELECT
           mm.id, mm.nosis, mm.nama, mm.kelompok_angkatan,
           mm.batalion, mm.ton, mm.kompi, mm.pleton,
-          -- JUMLAH = penjumlahan nilai numeric (bukan jumlah baris)
           COALESCE(SUM(n.nilai_num), 0)::numeric                      AS sum_num,
           AVG(n.nilai_num)                                            AS avg_num,
           COALESCE(
@@ -82,7 +98,7 @@ async function rekap(req, res) {
         LEFT JOIN mental_num n ON n.siswa_id = mm.id
         GROUP BY mm.id, mm.nosis, mm.nama, mm.kelompok_angkatan, mm.batalion, mm.ton, mm.kompi, mm.pleton
       ),
-      -- basis ranking untuk 1 angkatan penuh (sama seperti di detail siswa)
+      -- basis ranking untuk 1 angkatan + jenis (opsional)
       base AS (
         SELECT
           s.id, s.batalion,
@@ -100,8 +116,17 @@ async function rekap(req, res) {
         FROM siswa s
         LEFT JOIN mental m ON m.siswa_id = s.id
         ${
-          angkatan
-            ? `WHERE TRIM(s.kelompok_angkatan) = TRIM($${params.length})`
+          angkatan || jenis
+            ? `WHERE ${[
+                angkatan
+                  ? `TRIM(s.kelompok_angkatan) = TRIM($${angkatanIdx})`
+                  : null,
+                jenis
+                  ? `TRIM(COALESCE(s.jenis_pendidikan,'')) = TRIM($${jenisIdx})`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" AND ")}`
             : ""
         }
         GROUP BY s.id, s.batalion, s.ton
@@ -139,8 +164,8 @@ async function rekap(req, res) {
       ton: r.ton,
       kompi: r.kompi,
       pleton: r.pleton,
-      sum: r.sum_num == null ? 0 : Number(r.sum_num), // << JUMLAH
-      avg: r.avg_num == null ? null : Number(r.avg_num), // << RATA-RATA
+      sum: r.sum_num == null ? 0 : Number(r.sum_num),
+      avg: r.avg_num == null ? null : Number(r.avg_num),
       rank: {
         global: { pos: r.rank_global ?? null, total: r.total_global ?? null },
         batalion: {
@@ -153,6 +178,7 @@ async function rekap(req, res) {
       weeks: r.weeks || {},
     }));
 
+    // weeks ikut filter where (sudah mengandung q/angkatan/jenis)
     const weeksSql = `
       SELECT ARRAY(
         SELECT DISTINCT m.minggu_ke
@@ -171,6 +197,7 @@ async function rekap(req, res) {
       sort_dir: sortDir,
       q,
       angkatan,
+      jenis,
       weeks: weeksArr,
     });
   } catch (e) {

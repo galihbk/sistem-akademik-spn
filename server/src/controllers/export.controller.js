@@ -8,7 +8,7 @@ const puppeteer = require("puppeteer");
 const ExcelJS = require("exceljs"); // untuk export Excel
 
 /* =========================================================================
-   =                         HELPER UMUM (PDF)                             =
+   =                         HELPER UMUM (FILE)                            =
    ========================================================================= */
 
 async function tryReadFileBuffer(rootDir, relPath) {
@@ -22,6 +22,17 @@ async function tryReadFileBuffer(rootDir, relPath) {
     return null;
   }
 }
+
+function asDataUri(buffer, filename = "") {
+  if (!buffer) return null;
+  const mt = mime.lookup(filename) || "application/octet-stream";
+  const b64 = Buffer.from(buffer).toString("base64");
+  return `data:${mt};base64,${b64}`;
+}
+
+/* =========================================================================
+   =                     AMBIL DATA LENGKAP BY NIK                         =
+   ========================================================================= */
 
 async function getAllDataByNik(nik) {
   // siswa
@@ -52,7 +63,6 @@ async function getAllDataByNik(nik) {
       `SELECT * FROM mental WHERE siswa_id = $1 ORDER BY created_at ASC`,
       [siswaId]
     ),
-    // BK: punya file_path
     pool.query(
       `SELECT id, siswa_id, judul, tanggal, file_path, created_at
          FROM bk
@@ -60,7 +70,6 @@ async function getAllDataByNik(nik) {
         ORDER BY tanggal ASC`,
       [siswaId]
     ),
-    // Pelanggaran: punya file_path
     pool.query(
       `SELECT id, siswa_id, judul, tanggal, file_path, created_at
          FROM pelanggaran
@@ -72,7 +81,6 @@ async function getAllDataByNik(nik) {
       `SELECT * FROM mapel WHERE siswa_id = $1 ORDER BY created_at ASC`,
       [siswaId]
     ),
-    // Prestasi: TANPA file_path
     pool.query(
       `SELECT id, siswa_id, judul, tingkat, deskripsi, tanggal, created_at
          FROM prestasi
@@ -84,7 +92,6 @@ async function getAllDataByNik(nik) {
       `SELECT * FROM jasmani_spn WHERE siswa_id = $1 ORDER BY created_at ASC`,
       [siswaId]
     ),
-    // Riwayat kesehatan: TANPA file_path
     pool.query(
       `SELECT id, siswa_id, judul, deskripsi, tanggal, created_at
          FROM riwayat_kesehatan
@@ -108,6 +115,10 @@ async function getAllDataByNik(nik) {
   };
 }
 
+/* =========================================================================
+   =                         UTIL FORMAT & HTML                            =
+   ========================================================================= */
+
 function esc(s) {
   if (s == null) return "";
   return String(s)
@@ -127,33 +138,112 @@ function fmtDate(v) {
   });
 }
 
-function tableHTML(title, rows) {
+/** Render tabel generik */
+function tbl(title, rows) {
   if (!rows || rows.length === 0) {
     return `
-      <h2>${esc(title)}</h2>
+      <h3 class="section-title">${esc(title)}</h3>
       <div class="muted">Belum ada data.</div>
+      <div class="pb-12"></div>
     `;
   }
   const cols = Object.keys(rows[0]);
-  const thead = cols.map((c) => `<th>${esc(c.toUpperCase())}</th>`).join("");
-  const tbody = rows
+  const head = cols
+    .map((c) => `<th>${esc(c.replace(/_/g, " ").toUpperCase())}</th>`)
+    .join("");
+  const body = rows
     .map((r) => {
       const tds = cols.map((c) => `<td>${esc(r[c])}</td>`).join("");
       return `<tr>${tds}</tr>`;
     })
     .join("");
-
   return `
-    <h2>${esc(title)}</h2>
-    <table class="table">
-      <thead><tr>${thead}</tr></thead>
-      <tbody>${tbody}</tbody>
+    <h3 class="section-title">${esc(title)}</h3>
+    <table class="t">
+      <thead><tr>${head}</tr></thead>
+      <tbody>${body}</tbody>
     </table>
+    <div class="pb-12"></div>
   `;
 }
 
-function biodataHTML(s) {
-  const pairs = [
+/** Render tabel dengan kolom META tersembunyi (untuk Mental & Mapel) */
+function tblWithoutMeta(title, rows) {
+  if (!rows || rows.length === 0) {
+    return `
+      <h3 class="section-title">${esc(title)}</h3>
+      <div class="muted">Belum ada data.</div>
+      <div class="pb-12"></div>
+    `;
+  }
+  const HIDDEN = new Set([
+    "id",
+    "siswa_id",
+    "created_at",
+    "updated_at",
+    "file_path",
+  ]);
+  const cols = Object.keys(rows[0]).filter((k) => !HIDDEN.has(k));
+  const head = cols
+    .map((c) => `<th>${esc(c.replace(/_/g, " ").toUpperCase())}</th>`)
+    .join("");
+  const body = rows
+    .map((r) => {
+      const tds = cols.map((c) => `<td>${esc(r[c])}</td>`).join("");
+      return `<tr>${tds}</tr>`;
+    })
+    .join("");
+  return `
+    <h3 class="section-title">${esc(title)}</h3>
+    <table class="t">
+      <thead><tr>${head}</tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+    <div class="pb-12"></div>
+  `;
+}
+
+/** Blok non-tabel untuk Jasmani (tanpa tabel) */
+function jasmaniBlocks(rows) {
+  if (!rows || rows.length === 0) {
+    return `
+      <h3 class="section-title">JASMANI</h3>
+      <div class="muted">Belum ada data.</div>
+      <div class="pb-12"></div>
+    `;
+  }
+  const HIDDEN = new Set(["id", "siswa_id", "created_at", "updated_at"]);
+  const items = rows
+    .map((r, idx) => {
+      const pairs = Object.keys(r)
+        .filter((k) => !HIDDEN.has(k))
+        .map(
+          (k) =>
+            `<div><strong>${esc(
+              k.replace(/_/g, " ").toUpperCase()
+            )}</strong>: ${esc(r[k])}</div>`
+        )
+        .join("");
+      return `
+        <div class="card">
+          <div class="card-title">Entri ${idx + 1}</div>
+          <div class="card-body">
+            ${pairs}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+
+  return `
+    <h3 class="section-title">JASMANI</h3>
+    <div class="cards">${items}</div>
+    <div class="pb-12"></div>
+  `;
+}
+
+function biodataBlock(s, fotoDataUri) {
+  const rows = [
     ["Nama", s.nama],
     ["NOSIS", s.nosis],
     ["NIK", s.nik],
@@ -166,130 +256,326 @@ function biodataHTML(s) {
     ["Email", s.email],
     ["No HP", s.no_hp],
     ["No HP Keluarga", s.no_hp_keluarga],
-    ["Tempat Lahir", s.tempat_lahir],
-    ["Tanggal Lahir", fmtDate(s.tanggal_lahir)],
+    [
+      "Tempat / Tanggal Lahir",
+      `${esc(s.tempat_lahir || "-")} / ${fmtDate(s.tanggal_lahir)}`,
+    ],
     ["Umur", s.umur],
     ["Dikum Akhir", s.dikum_akhir],
     ["Jurusan", s.jurusan],
-    ["TB", s.tb],
-    ["BB", s.bb],
+    ["Tinggi / Berat", `${esc(s.tb || "-")} / ${esc(s.bb || "-")}`],
     ["Gol. Darah", s.gol_darah],
     ["No BPJS", s.no_bpjs],
     ["SIM", s.sim_yang_dimiliki],
-    ["Nama Ayah", s.nama_ayah_kandung],
-    ["Pekerjaan Ayah", s.pekerjaan_ayah_kandung],
-    ["Nama Ibu", s.nama_ibu_kandung],
-    ["Pekerjaan Ibu", s.pekerjaan_ibu_kandung],
-    ["Asal Polda", s.asal_polda],
-    ["Asal Polres", s.asal_polres],
+    [
+      "Nama Ayah / Pekerjaan",
+      `${esc(s.nama_ayah_kandung || "-")} / ${esc(
+        s.pekerjaan_ayah_kandung || "-"
+      )}`,
+    ],
+    [
+      "Nama Ibu / Pekerjaan",
+      `${esc(s.nama_ibu_kandung || "-")} / ${esc(
+        s.pekerjaan_ibu_kandung || "-"
+      )}`,
+    ],
+    [
+      "Asal Polda / Polres",
+      `${esc(s.asal_polda || "-")} / ${esc(s.asal_polres || "-")}`,
+    ],
     ["Kelompok Angkatan", s.kelompok_angkatan],
-    ["Diktuk Awal", s.diktuk_awal],
-    ["Tahun Diktuk", s.tahun_diktuk],
-    ["Ukuran Pakaian", s.ukuran_pakaian],
-    ["Ukuran Celana", s.ukuran_celana],
-    ["Ukuran Sepatu", s.ukuran_sepatu],
-    ["Ukuran Tutup Kepala", s.ukuran_tutup_kepala],
-    ["Dibuat", fmtDate(s.created_at)],
-    ["Diubah", fmtDate(s.updated_at)],
+    [
+      "Diktuk Awal / Tahun",
+      `${esc(s.diktuk_awal || "-")} / ${esc(s.tahun_diktuk || "-")}`,
+    ],
+    [
+      "Ukuran Pakaian/Celana/Sepatu/Topi",
+      `${esc(s.ukuran_pakaian || "-")} / ${esc(s.ukuran_celana || "-")} / ${esc(
+        s.ukuran_sepatu || "-"
+      )} / ${esc(s.ukuran_tutup_kepala || "-")}`,
+    ],
+    ["Dibuat / Diubah", `${fmtDate(s.created_at)} / ${fmtDate(s.updated_at)}`],
   ];
 
-  const grid = pairs
+  const left = rows
     .map(
       ([k, v]) => `
-    <div class="card">
-      <div class="muted">${esc(k)}</div>
-      <div class="val">${esc(v ?? "-")}</div>
-    </div>
-  `
+      <tr>
+        <th>${esc(k)}</th>
+        <td>${esc(v ?? "-")}</td>
+      </tr>`
     )
     .join("");
 
-  const fotoNote = s.foto
-    ? `<div class="muted small">Foto: ${esc(s.foto)}</div>`
-    : "";
+  const foto = fotoDataUri
+    ? `<img class="foto" src="${fotoDataUri}" alt="Foto Siswa" />`
+    : `<div class="foto foto-empty">FOTO</div>`;
 
   return `
-    <h1>Biodata Siswa</h1>
-    ${fotoNote}
-    <div class="grid">${grid}</div>
+    <div class="bio-grid">
+      <div class="bio-left">
+        <table class="kv">
+          <tbody>
+            ${left}
+          </tbody>
+        </table>
+      </div>
+      <div class="bio-right">
+        ${foto}
+      </div>
+    </div>
   `;
 }
 
-function buildHTML({ siswa, tabs }) {
+function buildHeaderFooterTemplates({
+  instansi = "SEKOLAH POLISI NEGARA (SPN) PURWOKERTO",
+  subInstansi = "Jl. Letjend Pol. Soemarto, Watumas, Purwanegara, Kec. Purwokerto Tim., Kabupaten Banyumas, Jawa Tengah 53127",
+  dokTitle = "LAPORAN DATA SISWA",
+  nomor = "",
+} = {}) {
+  // Puppeteer header/footer menggunakan HTML sederhana
+  const header = `
+  <div style="width:100%; font-size:9px; padding:6px 24px; color:#555; display:flex; align-items:center; justify-content:space-between;">
+    <div style="font-weight:700; text-transform:uppercase;">${esc(
+      instansi
+    )}</div>
+    <div style="opacity:.9">${esc(dokTitle)}</div>
+    <div style="opacity:.8">${esc(nomor)}</div>
+  </div>`;
+
+  const footer = `
+  <div style="width:100%; font-size:9px; padding:6px 24px; color:#555; display:flex; align-items:center; justify-content:space-between;">
+    <div>${esc(subInstansi)}</div>
+    <div class="pageNumber"></div>
+    <div class="date"></div>
+  </div>`;
+
+  return { headerTemplate: header, footerTemplate: footer };
+}
+
+function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
+  const instansi = "SEKOLAH POLISI NEGARA (SPN) PURWOKERTO";
+  const alamat =
+    "Jl. Letjend Pol. Soemarto, Watumas, Purwanegara, Kec. Purwokerto Tim., Kabupaten Banyumas, Jawa Tengah 53127";
+  const dokTitle = "LAPORAN DETAIL SISWA";
+  const nomor = `No. Dok: LPS-SISWA/${esc(siswa?.nosis || "-")}`;
+
+  // ringkas statistik
+  const ringkas = [
+    ["Jumlah Catatan Mental", (tabs.mental || []).length],
+    ["Berkas BK", (tabs.bk || []).length],
+    ["Berkas Pelanggaran", (tabs.pelanggaran || []).length],
+    ["Rekap Mapel", (tabs.mapel || []).length],
+    ["Prestasi", (tabs.prestasi || []).length],
+    ["Entri Jasmani", (tabs.jasmani || []).length],
+    ["Riwayat Kesehatan", (tabs.riwayat_kesehatan || []).length],
+  ]
+    .map(
+      ([k, v]) =>
+        `<tr><th>${esc(k)}</th><td style="text-align:right">${esc(v)}</td></tr>`
+    )
+    .join("");
+
   return `
 <!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>Export Siswa ${esc(siswa.nama || "")}</title>
+<title>${dokTitle} - ${esc(siswa?.nama || "")}</title>
 <style>
-  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; color:#0b1220; }
-  h1 { font-size: 22px; margin: 0 0 12px 0; }
-  h2 { font-size: 18px; margin: 0 0 8px 0; }
-  .muted { color: #475569; }
-  .small { font-size: 12px; }
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-  .card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
-  .val { font-weight: 700; font-size: 14px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th, td { border: 1px solid #e2e8f0; padding: 6px 8px; text-align: left; vertical-align: top; }
-  th { background: #f1f5f9; }
-  .section { page-break-inside: avoid; }
-  .pagebreak { page-break-before: always; } /* <<< ini kuncinya */
-  .footer-note { font-size: 11px; color:#64748b; margin-top: 8px; }
+  /* --------- Tipografi & Layout Cetak Formal --------- */
+  @page { size: A4; margin: 22mm 16mm 20mm 16mm; }
+  body { font-family: "Times New Roman", Times, serif; color: #111; font-size: 11.5pt; }
+  h1, h2, h3 { margin: 0 0 8px 0; }
+  h1 { font-size: 18pt; letter-spacing: .2pt; text-align:center; text-transform: uppercase; }
+  h2 { font-size: 14pt; margin-top: 16px; text-transform: uppercase; }
+  h3.section-title { font-size: 12.5pt; margin: 14px 0 6px; border-bottom: 1px solid #333; padding-bottom: 3px; }
+  .muted { color:#444; }
+  .pb-12 { padding-bottom: 12px; }
+
+  /* Watermark hal selain cover */
+  .watermark {
+    position: fixed;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-18deg);
+    font-size: 48pt;
+    color: rgba(0,0,0,.06);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Kop & Cover */
+  .cover { page-break-after: always; }
+  .kop { text-align: center; margin-bottom: 24px; }
+  .kop .instansi { font-weight: 700; font-size: 16pt; letter-spacing:.4pt; }
+  .kop .sub { font-size: 10.5pt; margin-top: 4px; }
+  .kop hr { margin-top: 10px; border:0; border-top: 2px solid #000; }
+  .kop .alamat { font-size: 10pt; margin-top:6px; }
+  .kop .logo { width: 48px; height: 48px; object-fit: contain; display:inline-block; vertical-align: middle; margin-right:8px; }
+
+  .ident {
+    margin-top: 24px;
+    display: grid;
+    grid-template-columns: 1.1fr .9fr;
+    gap: 16px;
+  }
+  .box { border: 1px solid #000; padding: 12px; border-radius: 2px; }
+  .kv { width: 100%; border-collapse: collapse; }
+  .kv th, .kv td { padding: 6px 8px; border-bottom: 1px solid #e5e5e5; vertical-align: top; }
+  .kv th { width: 42%; font-weight: 700; text-align: left; }
+  .foto { width: 42mm; height: 56mm; object-fit: cover; border: 1px solid #333; display:block; margin: 0 auto; }
+  .foto-empty { display:flex; align-items:center; justify-content:center; background:#f6f6f6; color:#777; }
+
+  .bio-grid { display:grid; grid-template-columns: 1fr 48mm; gap: 16px; }
+  .bio-left { }
+  .bio-right { display:flex; align-items:flex-start; justify-content:center; }
+
+  .summary table { width:100%; border-collapse: collapse; }
+  .summary th, .summary td { border: 1px solid #000; padding: 6px 8px; }
+  .summary th { text-align:left; background:#f2f2f2; }
+
+  /* Tabel data */
+  table.t { width:100%; border-collapse: collapse; }
+  table.t th, table.t td { border: 1px solid #000; padding: 6px 8px; }
+  table.t thead th { background:#f2f2f2; }
+
+  /* Kartu Jasmani (tanpa tabel) */
+  .cards { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .card { border:1px solid #000; padding:10px; }
+  .card-title { font-weight:700; margin-bottom:6px; }
+
+  /* Penandatangan */
+  .signed {
+    display:grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 28px;
+  }
+  .signed .sigbox { text-align:center; }
+  .signed .sigbox .space { height: 48px; }
+  .note { font-size: 9.5pt; color:#444; margin-top:8px; }
+
+  /* Penomoran halaman ada di footer puppeteer */
 </style>
 </head>
 <body>
 
-<!-- Halaman 1: Biodata -->
-<div class="section">
-  ${biodataHTML(siswa)}
-</div>
+<!-- COVER -->
+<section class="cover">
+  <div class="kop">
+    <div>
+      ${
+        logoDataUri
+          ? `<img class="logo" src="${logoDataUri}" alt="Logo SPN" />`
+          : ""
+      }
+      <span class="instansi"> ${instansi}</span>
+    </div>
+    <hr />
+    <div class="alamat">${esc(alamat)}</div>
+  </div>
 
-<!-- Halaman 2 dst: tiap tab diberi pagebreak -->
+  <h1>${dokTitle}</h1>
+  <div style="text-align:center; margin-top: 8px;">${esc(
+    siswa?.nama || "-"
+  )}<br/>NOSIS: ${esc(siswa?.nosis || "-")} &nbsp;|&nbsp; NIK: ${esc(
+    siswa?.nik || "-"
+  )}</div>
 
-<div class="pagebreak section">
-  ${tableHTML("Mental Kepribadian", tabs.mental)}
-</div>
+  <div class="ident">
+    <div class="box">
+      <h2>Identitas</h2>
+      ${biodataBlock(siswa, fotoDataUri)}
+    </div>
 
-<div class="pagebreak section">
-  ${tableHTML("BK (Daftar Dokumen)", tabs.bk)}
-  <div class="footer-note">Lampiran dokumen PDF/Gambar akan disertakan di bagian paling bawah.</div>
-</div>
+    <div class="box summary">
+      <h2>Ringkasan</h2>
+      <table>
+        <tbody>
+          ${ringkas}
+        </tbody>
+      </table>
 
-<div class="pagebreak section">
-  ${tableHTML("Pelanggaran (Daftar Dokumen)", tabs.pelanggaran)}
-  <div class="footer-note">Lampiran dokumen PDF/Gambar akan disertakan di bagian paling bawah.</div>
-</div>
+      <div class="note">
+        Catatan: Ringkasan ini menggambarkan jumlah entri per bagian.
+        Rincian lengkap tersaji pada halaman berikutnya.
+      </div>
+    </div>
+  </div>
+</section>
 
-<div class="pagebreak section">
-  ${tableHTML("Mapel", tabs.mapel)}
-</div>
+<div class="watermark">SPN</div>
 
-<div class="pagebreak section">
-  ${tableHTML("Prestasi", tabs.prestasi)}
-</div>
+<!-- BAGIAN: MENTAL (tanpa META) -->
+<section>
+  ${tblWithoutMeta("MENTAL KEPRIBADIAN", tabs.mental)}
+</section>
 
-<div class="pagebreak section">
-  ${tableHTML("Jasmani", tabs.jasmani)}
-</div>
+<!-- BAGIAN: BK (tetap) -->
+<section>
+  ${tbl("BK (DAFTAR DOKUMEN)", tabs.bk)}
+  <div class="note">Lampiran berkas akan disertakan pada bagian “Lampiran Dokumen”.</div>
+  <div class="pb-12"></div>
+</section>
 
-<div class="pagebreak section">
-  ${tableHTML("Riwayat Kesehatan", tabs.riwayat_kesehatan)}
-</div>
+<!-- BAGIAN: PELANGGARAN (tetap) -->
+<section>
+  ${tbl("PELANGGARAN (DAFTAR DOKUMEN)", tabs.pelanggaran)}
+  <div class="note">Lampiran berkas akan disertakan pada bagian “Lampiran Dokumen”.</div>
+  <div class="pb-12"></div>
+</section>
 
-<!-- Lampiran juga di halaman baru -->
-<div class="pagebreak section">
-  <h2>Lampiran</h2>
-  <div class="muted small">Semua file lampiran (PDF dan gambar) akan muncul setelah halaman ini.</div>
-</div>
+<!-- BAGIAN: MAPEL (tanpa META) -->
+<section>
+  ${tblWithoutMeta("MAPEL", tabs.mapel)}
+</section>
+
+<!-- BAGIAN: PRESTASI (tetap) -->
+<section>
+  ${tbl("PRESTASI", tabs.prestasi)}
+</section>
+
+<!-- BAGIAN: JASMANI (tanpa tabel) -->
+<section>
+  ${jasmaniBlocks(tabs.jasmani)}
+</section>
+
+<!-- BAGIAN: RIWAYAT KESEHATAN (tetap) -->
+<section>
+  ${tbl("RIWAYAT KESEHATAN", tabs.riwayat_kesehatan)}
+</section>
+
+<!-- PENANDATANGAN -->
+<section>
+  <h3 class="section-title">Pengesahan</h3>
+  <div class="signed">
+    <div class="sigbox">
+      Mengetahui,<br/>Kepala/Pembina Pendidikan<br/><div class="space"></div>
+      <span style="display:inline-block; border-top:1px solid #000; min-width:160px; margin-top:8px;">Nama Jelas</span><br/>
+      NRP/NIP. .........................
+    </div>
+    <div class="sigbox">
+      Disusun oleh,<br/>Staf/Admin Akademik<br/><div class="space"></div>
+      <span style="display:inline-block; border-top:1px solid #000; min-width:160px; margin-top:8px;">Nama Jelas</span><br/>
+      NRP/NIP. .........................
+    </div>
+  </div>
+</section>
+
+<!-- LAMPIRAN -->
+<section style="page-break-before: always">
+  <h3 class="section-title">LAMPIRAN DOKUMEN</h3>
+  <div class="note">Semua berkas dari bagian BK dan Pelanggaran akan ditempel di halaman-halaman setelah ini secara berurutan.</div>
+</section>
 
 </body>
 </html>
 `;
 }
 
-async function renderHTMLToPDF(html) {
+/* =========================================================================
+   =                    RENDER HTML -> PDF (PUPPETEER)                      =
+   ========================================================================= */
+
+async function renderHTMLToPDF({ html, headerTemplate, footerTemplate }) {
   const browser = await puppeteer.launch({
     headless: "new",
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
@@ -297,16 +583,43 @@ async function renderHTMLToPDF(html) {
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "networkidle0" });
+
+    // inject helpers untuk footer
+    await page.exposeFunction("formatNow", () => {
+      const d = new Date();
+      return d.toLocaleString("id-ID", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    });
+
+    // puppeteer page.pdf options
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,
-      margin: { top: "16mm", right: "12mm", bottom: "16mm", left: "12mm" },
+      displayHeaderFooter: true,
+      headerTemplate:
+        headerTemplate ||
+        `<div style="font-size:9px; padding:6px 24px; width:100%;"></div>`,
+      footerTemplate:
+        footerTemplate ||
+        `<div style="font-size:9px; padding:6px 24px; width:100%;">
+           <span class="pageNumber"></span> / <span class="totalPages"></span>
+         </div>`,
+      margin: { top: "44mm", right: "16mm", bottom: "16mm", left: "16mm" },
     });
     return Buffer.from(pdf);
   } finally {
     await browser.close();
   }
 }
+
+/* =========================================================================
+   =                   MERGE LAMPIRAN (PDF/IMG) KE MASTER                   =
+   ========================================================================= */
 
 async function mergeWithAttachments(basePdfBuf, attachments) {
   let masterDoc = await PDFDocument.load(basePdfBuf);
@@ -332,9 +645,10 @@ async function mergeWithAttachments(basePdfBuf, attachments) {
         if (m.includes("png")) img = await imgDoc.embedPng(att.buffer);
         else img = await imgDoc.embedJpg(att.buffer);
 
-        const page = imgDoc.addPage([595.28, 841.89]); // A4
-        const maxW = 595.28 - 40;
-        const maxH = 841.89 - 40;
+        // A4 portrait
+        const page = imgDoc.addPage([595.28, 841.89]);
+        const maxW = 595.28 - 48;
+        const maxH = 841.89 - 48;
         let w = img.width,
           h = img.height;
         const ratio = Math.min(maxW / w, maxH / h);
@@ -372,10 +686,40 @@ async function exportAllByNik(req, res) {
     const data = await getAllDataByNik(nik);
     if (!data) return res.status(404).send("Siswa tidak ditemukan");
 
-    const html = buildHTML(data);
-    const basePdf = await renderHTMLToPDF(html);
-
+    // siapkan foto (jika ada) sebagai data URI agar stabil saat render headless
     const uploadsRoot = path.resolve(process.cwd(), "uploads");
+    let fotoDataUri = null;
+    if (data.siswa?.foto) {
+      const fbuf = await tryReadFileBuffer(uploadsRoot, data.siswa.foto);
+      if (fbuf) fotoDataUri = asDataUri(fbuf, data.siswa.foto);
+    }
+
+    // siapkan logo SPN
+    let logoDataUri = null;
+    const logoBuf = await tryReadFileBuffer(uploadsRoot, "logo/logo-spn.png");
+    if (logoBuf) logoDataUri = asDataUri(logoBuf, "logo-spn.png");
+
+    // bangun HTML formal + header/footer template
+    const html = buildReportHTML({
+      siswa: data.siswa,
+      tabs: data.tabs,
+      fotoDataUri,
+      logoDataUri,
+    });
+    const { headerTemplate, footerTemplate } = buildHeaderFooterTemplates({
+      instansi: "SEKOLAH POLISI NEGARA (SPN) PURWOKERTO",
+      subInstansi:
+        "Jl. Letjend Pol. Soemarto, Watumas, Purwanegara, Kec. Purwokerto Tim., Kabupaten Banyumas, Jawa Tengah 53127",
+      dokTitle: "LAPORAN DETAIL SISWA",
+      nomor: `No. Dok: LPS-SISWA/${esc(data.siswa?.nosis || "-")}`,
+    });
+
+    // render html -> pdf
+    const basePdf = await renderHTMLToPDF({
+      html,
+      headerTemplate,
+      footerTemplate,
+    });
 
     // Lampiran HANYA dari bk & pelanggaran (punya file_path)
     const fileRows = []
@@ -404,7 +748,7 @@ async function exportAllByNik(req, res) {
       return res.status(200).end();
     }
 
-    const filename = `Export_${nik}_${Date.now()}.pdf`;
+    const filename = `Laporan_Siswa_${nik}_${Date.now()}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     return res.status(200).send(finalPdf);
@@ -420,7 +764,6 @@ async function exportAllByNik(req, res) {
    ========================================================================= */
 
 function toTitleCase(h) {
-  // "ukuran_tutup_kepala" -> "Ukuran Tutup Kepala"
   return String(h || "")
     .split("_")
     .map((s) => (s ? s[0].toUpperCase() + s.slice(1) : s))
@@ -434,7 +777,6 @@ function parseBool(v) {
 }
 
 async function getSiswaColumnsMeta() {
-  // Ambil daftar kolom & tipe data dari tabel siswa sesuai urutan aslinya.
   const sql = `
     SELECT column_name, data_type
     FROM information_schema.columns
@@ -442,7 +784,7 @@ async function getSiswaColumnsMeta() {
     ORDER BY ordinal_position
   `;
   const { rows } = await pool.query(sql);
-  return rows; // [{column_name, data_type}, ...]
+  return rows;
 }
 
 async function exportSiswaXlsx(req, res) {
@@ -451,7 +793,6 @@ async function exportSiswaXlsx(req, res) {
     const angkatan = (req.query.angkatan || "").toString().trim();
     const all = parseBool(req.query.all);
 
-    // Sorting whitelist (aman)
     const SORT_WHITELIST = new Map([
       ["nama", "LOWER(nama)"],
       ["nosis", "LOWER(nosis)"],
@@ -465,7 +806,6 @@ async function exportSiswaXlsx(req, res) {
     sort_dir = sort_dir === "desc" ? "DESC" : "ASC";
     const sortExpr = SORT_WHITELIST.get(sort_by) || SORT_WHITELIST.get("nama");
 
-    // Pagination (jika all != true)
     const page = Math.max(1, parseInt(req.query.page || "1", 10));
     const limit = Math.min(
       20000,
@@ -473,7 +813,6 @@ async function exportSiswaXlsx(req, res) {
     );
     const offset = (page - 1) * limit;
 
-    // WHERE
     const where = [];
     const params = [];
 
@@ -495,18 +834,15 @@ async function exportSiswaXlsx(req, res) {
 
     const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-    // Ambil metadata kolom dinamis
-    const colsMeta = await getSiswaColumnsMeta(); // urut sesuai ordinal_position
+    const colsMeta = await getSiswaColumnsMeta();
     if (!colsMeta.length) {
       return res
         .status(500)
         .json({ message: "Tidak menemukan metadata kolom siswa." });
     }
 
-    // Susun SELECT dinamis (nama kolom di-escape pakai double quotes)
     const selectList = colsMeta.map((c) => `"${c.column_name}"`).join(", ");
 
-    // Query data
     const sql = `
       SELECT ${selectList}
       FROM siswa
@@ -519,11 +855,9 @@ async function exportSiswaXlsx(req, res) {
       await pool.query(sql, all ? params : [...params, limit, offset])
     ).rows;
 
-    // Workbook
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Siswa");
 
-    // Definisikan kolom worksheet sesuai metadata
     ws.columns = colsMeta.map((c) => ({
       header: toTitleCase(c.column_name),
       key: c.column_name,
@@ -531,7 +865,6 @@ async function exportSiswaXlsx(req, res) {
     }));
     ws.getRow(1).font = { bold: true };
 
-    // Isi baris data
     for (const r of rows) {
       const obj = {};
       for (const c of colsMeta) {
@@ -551,7 +884,6 @@ async function exportSiswaXlsx(req, res) {
       ws.addRow(obj);
     }
 
-    // Format kolom bertipe tanggal/waktu
     colsMeta.forEach((c, idx) => {
       const dtype = String(c.data_type).toLowerCase();
       if (dtype.includes("timestamp") || dtype.includes("date")) {
@@ -559,7 +891,6 @@ async function exportSiswaXlsx(req, res) {
       }
     });
 
-    // Nama file
     const ts = new Date();
     const y = ts.getFullYear();
     const m = String(ts.getMonth() + 1).padStart(2, "0");
@@ -586,7 +917,6 @@ async function exportSiswaXlsx(req, res) {
 
 /* =========================================================================
    =                 CONTROLLER: Excel Rekap Mental (filter)               =
-   =          ENDPOINT: GET /export/mental_rekap.xlsx?all=1                =
    ========================================================================= */
 
 function sanitizeSort({ sort_by, sort_dir }) {
@@ -606,7 +936,6 @@ async function exportMentalRekapExcel(req, res) {
       sort_dir: req.query.sort_dir,
     });
 
-    // ---- filter & param
     const where = [];
     const params = [];
     let p = 1;
@@ -624,7 +953,6 @@ async function exportMentalRekapExcel(req, res) {
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-    // ---- 1) ambil daftar minggu
     const weeksSql = `
       SELECT DISTINCT m.minggu_ke
       FROM mental m
@@ -638,7 +966,6 @@ async function exportMentalRekapExcel(req, res) {
       .filter((n) => Number.isFinite(n))
       .sort((a, b) => a - b);
 
-    // ---- 2) query utama (PERBAIKAN: pakai alias 'b' di pivotExprs)
     const pivotExprs = weeks
       .map(
         (w) =>
@@ -716,7 +1043,6 @@ async function exportMentalRekapExcel(req, res) {
     const dataRes = await pool.query(sql, params);
     const rows = dataRes.rows || [];
 
-    // ---- 3) build Excel
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Rekap Mental");
 
@@ -811,7 +1137,10 @@ async function exportMentalRekapExcel(req, res) {
   }
 }
 
-// whitelist kolom sort agar aman dari SQL injection
+/* =========================================================================
+   =                       MAPEL & JASMANI EXPORTS                         =
+   ========================================================================= */
+
 function sanitizeMapelSort({ sort_by, sort_dir }) {
   const map = new Map([
     ["nama", "LOWER(s.nama)"],
@@ -841,9 +1170,7 @@ async function exportMapelXlsx(req, res) {
       sort_dir: req.query.sort_dir,
     });
 
-    // Jika mapel tidak diisi → fallback ke export flat lama (aman).
     if (!mapelName) {
-      // ===== EXPORT FLAT (seperti sebelumnya) =====
       const where = [];
       const params = [];
       let p = 1;
@@ -947,7 +1274,7 @@ async function exportMapelXlsx(req, res) {
       return res.status(200).send(nodeBuf);
     }
 
-    // ===== EXPORT PIVOT (pertemuan ke samping) untuk mapel tertentu =====
+    // Pivot (mapel tertentu)
     const where = [];
     const params = [];
     let p = 1;
@@ -960,7 +1287,6 @@ async function exportMapelXlsx(req, res) {
       where.push(`COALESCE(m.semester, '') = $${p++}`);
       params.push(semester);
     }
-    // mapelName WAJIB di jalur pivot
     where.push(`LOWER(COALESCE(m.mapel,'')) = LOWER($${p++})`);
     params.push(mapelName);
 
@@ -974,7 +1300,6 @@ async function exportMapelXlsx(req, res) {
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-    // 1) ambil daftar pertemuan (minggu) yang relevan
     const weeksSql = `
       SELECT DISTINCT m.pertemuan AS w
       FROM mapel m
@@ -988,7 +1313,6 @@ async function exportMapelXlsx(req, res) {
       .filter((n) => Number.isFinite(n))
       .sort((a, b) => a - b);
 
-    // 2) Query utama: base → agg → ranks → pivot
     const pivotExprs = weeks.length
       ? weeks
           .map(
@@ -1067,12 +1391,11 @@ async function exportMapelXlsx(req, res) {
     const dataRes = await pool.query(sql, params);
     const rows = dataRes.rows || [];
 
-    // 3) Build Excel (pivot)
     const wb = new ExcelJS.Workbook();
     const sheetTitle = `Rekap ${mapelName}${
       semester ? ` (Smt ${semester})` : ""
     }`;
-    const ws = wb.addWorksheet(sheetTitle.substring(0, 31)); // excel limit 31 chars
+    const ws = wb.addWorksheet(sheetTitle.substring(0, 31));
 
     const baseCols = [
       { header: "NOSIS", key: "nosis", width: 14 },
@@ -1141,7 +1464,6 @@ async function exportMapelXlsx(req, res) {
       ws.addRow(obj);
     }
 
-    // 4) Kirim response
     const ts = new Date();
     const y = ts.getFullYear();
     const m2 = String(ts.getMonth() + 1).padStart(2, "0");
@@ -1201,7 +1523,6 @@ async function exportJasmaniRekapExcel(req, res) {
       sort_dir: req.query.sort_dir,
     });
 
-    // WHERE dasar (filter siswa)
     const whereParts = [];
     const params = [];
     let p = 1;
@@ -1221,10 +1542,8 @@ async function exportJasmaniRekapExcel(req, res) {
       ? `WHERE ${whereParts.join(" AND ")}`
       : "";
 
-    // Cek apakah tabel jasmani_spn punya kolom tahap
     const hasTahap = await tableHasColumn("jasmani_spn", "tahap");
 
-    // Tentukan tahapFinal bila kolom ada
     let tahapFinal = null;
     if (hasTahap) {
       if (tahapInput !== "") {
@@ -1241,7 +1560,6 @@ async function exportJasmaniRekapExcel(req, res) {
         const maxRes = await pool.query(maxSql, params);
         tahapFinal = maxRes.rows?.[0]?.max_tahap ?? null;
         if (tahapFinal == null) {
-          // tidak ada data → kembalikan file kosong yang informatif
           const wbEmpty = new ExcelJS.Workbook();
           const wsEmpty = wbEmpty.addWorksheet("Rekap Jasmani");
           wsEmpty.addRow(["Tidak ada data untuk filter ini"]);
@@ -1259,7 +1577,6 @@ async function exportJasmaniRekapExcel(req, res) {
       }
     }
 
-    // SQL utama: dua jalur (punya tahap vs tidak)
     const sql = hasTahap
       ? `
         WITH base AS (
@@ -1308,7 +1625,6 @@ async function exportJasmaniRekapExcel(req, res) {
         ORDER BY ${sortCol === "nosis" ? "nosis" : "nama"} ${sortDir}, nosis ASC
       `
       : `
-        -- Tidak filter tahap: ambil baris TERBARU per siswa (created_at paling baru)
         WITH latest AS (
           SELECT DISTINCT ON (j.siswa_id) j.*
           FROM jasmani_spn j
@@ -1327,7 +1643,7 @@ async function exportJasmaniRekapExcel(req, res) {
             NULL::int AS tahap,
             l.lari_12_menit_ts::numeric   AS lari_12_menit_ts,
             l.lari_12_menit_rs::numeric   AS lari_12_menit_rs,
-            l.sit_up_ts::numeric          AS sit_up_ts,
+            l.sit_up_ts::numeric          AS lari_12_menit_rs,
             l.sit_up_rs::numeric          AS sit_up_rs,
             l.shuttle_run_ts::numeric     AS shuttle_run_ts,
             l.shuttle_run_rs::numeric     AS shuttle_run_rs,
@@ -1364,11 +1680,9 @@ async function exportJasmaniRekapExcel(req, res) {
       hasTahap ? [...params, tahapFinal] : params
     );
 
-    // ===== Build Excel: header 2-level seperti UI RekapJasmani.jsx =====
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Rekap Jasmani");
 
-    // Baris 1 (judul grup) & Baris 2 (subjudul TS/RS)
     const row1 = [
       "NOSIS",
       "Nama",
@@ -1415,7 +1729,6 @@ async function exportJasmaniRekapExcel(req, res) {
     ws.addRow(row1);
     ws.addRow(row2);
 
-    // Merge header
     [
       "A1:A2",
       "B1:B2",
@@ -1433,7 +1746,6 @@ async function exportJasmaniRekapExcel(req, res) {
       "S1:S2",
     ].forEach((r) => ws.mergeCells(r));
 
-    // Styling header
     [1, 2].forEach((rn) => {
       const r = ws.getRow(rn);
       r.font = { bold: true };
@@ -1444,7 +1756,6 @@ async function exportJasmaniRekapExcel(req, res) {
       };
     });
 
-    // Lebar kolom
     const widths = {
       A: 14,
       B: 28,
@@ -1467,13 +1778,10 @@ async function exportJasmaniRekapExcel(req, res) {
       S: 30,
     };
     Object.entries(widths).forEach(([col, w]) => (ws.getColumn(col).width = w));
-
-    // Format angka untuk metrik & nilai akhir
     ["H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R"].forEach((c) => {
       ws.getColumn(c).numFmt = "0.000";
     });
 
-    // Data
     for (const r of rows) {
       ws.addRow([
         r.nosis ?? "",
@@ -1489,31 +1797,23 @@ async function exportJasmaniRekapExcel(req, res) {
         r.rk_pleton != null && r.total_pleton
           ? `${r.rk_pleton}/${r.total_pleton}`
           : "-",
-
         r.lari_12_menit_ts != null ? Number(r.lari_12_menit_ts) : null,
         r.lari_12_menit_rs != null ? Number(r.lari_12_menit_rs) : null,
-
         r.sit_up_ts != null ? Number(r.sit_up_ts) : null,
         r.sit_up_rs != null ? Number(r.sit_up_rs) : null,
-
         r.shuttle_run_ts != null ? Number(r.shuttle_run_ts) : null,
         r.shuttle_run_rs != null ? Number(r.shuttle_run_rs) : null,
-
         r.push_up_ts != null ? Number(r.push_up_ts) : null,
         r.push_up_rs != null ? Number(r.push_up_rs) : null,
-
         r.pull_up_ts != null ? Number(r.pull_up_ts) : null,
         r.pull_up_rs != null ? Number(r.pull_up_rs) : null,
-
         r.nilai_akhir != null ? Number(r.nilai_akhir) : null,
         r.keterangan ?? "",
       ]);
     }
 
-    // Freeze header dan kolom identitas
     ws.views = [{ state: "frozen", xSplit: 7, ySplit: 2 }];
 
-    // Nama file
     const ts = new Date();
     const y = ts.getFullYear();
     const m2 = String(ts.getMonth() + 1).padStart(2, "0");

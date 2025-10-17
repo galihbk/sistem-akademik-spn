@@ -63,13 +63,13 @@ function detectColumns(headersRaw) {
       /\bchinning\b.*\brs\b/,
     ],
 
-    // Nilai akhir: prioritaskan "RATA NILAI A+B", lalu "RATA NILAI B", lalu fallback umum
+    // Nilai akhir
     nilai_akhir: [
-      /\brata\s*nilai\s*a\s*b\b/, // "RATA NILAI A+B" -> norm: "rata nilai a b"
-      /\brata\s*nilai\s*b\b/, // "RATA NILAI B"
-      /\bnilai\s*akhir\b/, // "NILAI AKHIR"
-      /^\btotal\b$/, // "TOTAL"
-      /^\bnilai\b$/, // "NILAI"
+      /\brata\s*nilai\s*a\s*b\b/,
+      /\brata\s*nilai\s*b\b/,
+      /\bnilai\s*akhir\b/,
+      /^\btotal\b$/,
+      /^\bnilai\b$/,
     ],
 
     keterangan: [/^keterangan$/, /^ket$/],
@@ -185,7 +185,8 @@ exports.importExcel = async (req, res) => {
     const errors = [];
     const caches = { byNosis: new Map(), byNama: new Map() };
 
-    await client.query("BEGIN");
+    const clientTx = client;
+    await clientTx.query("BEGIN");
 
     for (let i = 0; i < rows.length; i++) {
       const raw = rows[i];
@@ -193,7 +194,7 @@ exports.importExcel = async (req, res) => {
       const nosis = cols.nosis ? raw[cols.nosis] : null;
       const nama = cols.nama ? raw[cols.nama] : null;
 
-      const siswa_id = await resolveSiswaId(client, nosis, nama, caches);
+      const siswa_id = await resolveSiswaId(clientTx, nosis, nama, caches);
       if (!siswa_id) {
         skipped++;
         errors.push(
@@ -250,7 +251,7 @@ exports.importExcel = async (req, res) => {
       // cek existing (siswa_id + tahap)
       let existingId = null;
       if (payload.tahap != null) {
-        const r = await client.query(
+        const r = await clientTx.query(
           `SELECT id FROM jasmani_spn WHERE siswa_id = $1 AND tahap = $2 LIMIT 1`,
           [siswa_id, payload.tahap]
         );
@@ -274,7 +275,7 @@ exports.importExcel = async (req, res) => {
           sumber_file      = COALESCE($13, sumber_file),
           updated_at       = NOW()
         WHERE id = $14`;
-        await client.query(q, [
+        await clientTx.query(q, [
           payload.lari_12_menit_ts,
           payload.lari_12_menit_rs,
           payload.sit_up_ts,
@@ -302,7 +303,7 @@ exports.importExcel = async (req, res) => {
            nilai_akhir, keterangan, tahap, sumber_file)
          VALUES
           ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`;
-        await client.query(q, [
+        await clientTx.query(q, [
           payload.siswa_id,
           payload.nosis,
           payload.lari_12_menit_ts,
@@ -324,7 +325,7 @@ exports.importExcel = async (req, res) => {
       }
     }
 
-    await client.query("COMMIT");
+    await clientTx.query("COMMIT");
     res.json({
       ok: true,
       sheet: "REKAP",
@@ -344,14 +345,16 @@ exports.importExcel = async (req, res) => {
 };
 
 /* =========================================================
- * GET /jasmani/template?angkatan=55&tahap=1
+ * GET /jasmani/template?angkatan=55&tahap=1&jenis=DIKTUK
  *  - Sheet: REKAP
  *  - Header menyertakan kolom TAHAP
  *  - Jika ?tahap=... dikirim, isi default kolom TAHAP
+ *  - Kalau ?jenis=... dikirim, filter siswa berdasarkan s.jenis_pendidikan
  * ========================================================= */
 exports.template = async (req, res) => {
   try {
     const angkatan = (req.query.angkatan || "").trim();
+    const jenis = (req.query.jenis || "").trim();
     const tahapDefault = toInt(req.query.tahap || null);
 
     const params = [];
@@ -359,6 +362,10 @@ exports.template = async (req, res) => {
     if (angkatan) {
       params.push(angkatan);
       where += ` AND TRIM(kelompok_angkatan)=TRIM($${params.length})`;
+    }
+    if (jenis) {
+      params.push(jenis);
+      where += ` AND TRIM(COALESCE(jenis_pendidikan,''))=TRIM($${params.length})`;
     }
 
     const { rows } = await pool.query(
@@ -380,7 +387,6 @@ exports.template = async (req, res) => {
         "PUSH UP (RS)",
         "PULL UP (TS)",
         "PULL UP (RS)",
-        // nilai_akhir akan diisi operator sebagai "RATA NILAI A+B" di template lapangan
         "RATA NILAI A+B",
         "KETERANGAN",
       ],
@@ -388,7 +394,7 @@ exports.template = async (req, res) => {
         r.nosis || "",
         tahapDefault ?? "",
         "",
-        "", // lari RS/TS (lokasi kolom disesuaikan pengguna)
+        "",
         "",
         "",
         "",
@@ -409,7 +415,9 @@ exports.template = async (req, res) => {
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
     const fname = `Template_Jasmani_REKAP${
       angkatan ? `_Angkatan_${angkatan}` : ""
-    }${tahapDefault != null ? `_Tahap_${tahapDefault}` : ""}.xlsx`;
+    }${jenis ? `_Jenis_${jenis}` : ""}${
+      tahapDefault != null ? `_Tahap_${tahapDefault}` : ""
+    }.xlsx`;
 
     res.setHeader(
       "Content-Type",
@@ -424,13 +432,14 @@ exports.template = async (req, res) => {
 };
 
 /* =========================================================
- * GET /jasmani/rekap?q=&angkatan=&tahap=&page=&limit=&sort_by=&sort_dir=
+ * GET /jasmani/rekap?q=&angkatan=&jenis=&tahap=&page=&limit=&sort_by=&sort_dir=
  *   — Termasuk ranking (global/batalion/kompi/pleton) berdasar nilai_akhir
  * ========================================================= */
 exports.rekap = async (req, res) => {
   try {
     const q = (req.query.q || "").trim().toLowerCase();
     const angkatan = (req.query.angkatan || "").trim();
+    const jenis = (req.query.jenis || "").trim();
     const tahapParam = req.query.tahap;
     const tahap =
       tahapParam != null && tahapParam !== "" ? parseInt(tahapParam, 10) : null;
@@ -459,9 +468,17 @@ exports.rekap = async (req, res) => {
       params.push(`%${q}%`);
       where += ` AND (LOWER(s.nama) LIKE $${params.length} OR LOWER(s.nosis) LIKE $${params.length})`;
     }
+    let idxAngkatan = null;
     if (angkatan) {
       params.push(angkatan);
-      where += ` AND TRIM(s.kelompok_angkatan) = TRIM($${params.length})`;
+      idxAngkatan = params.length;
+      where += ` AND TRIM(s.kelompok_angkatan) = TRIM($${idxAngkatan})`;
+    }
+    let idxJenis = null;
+    if (jenis) {
+      params.push(jenis);
+      idxJenis = params.length;
+      where += ` AND TRIM(COALESCE(s.jenis_pendidikan,'')) = TRIM($${idxJenis})`;
     }
 
     // --------- TOTAL siswa match
@@ -642,6 +659,7 @@ exports.rekap = async (req, res) => {
       sort_dir: sortDir,
       q,
       angkatan,
+      jenis,
       tahap,
     });
   } catch (e) {

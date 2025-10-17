@@ -1,3 +1,4 @@
+// renderer/src/pages/UploadPdf.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchSiswa } from "../api/siswa";
 
@@ -69,6 +70,7 @@ export default function UploadPdf({ kind }) {
   const title = isBK ? "Upload BK (PDF)" : "Upload Pelanggaran (PDF)";
 
   const [open, setOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   // form (modal)
   const [query, setQuery] = useState("");
@@ -197,6 +199,7 @@ export default function UploadPdf({ kind }) {
     }
 
     try {
+      setUploading(true);
       const token = await window.authAPI?.getToken?.();
       const form = new FormData();
       form.append("file", file);
@@ -214,6 +217,8 @@ export default function UploadPdf({ kind }) {
 
       // reset form & close
       setFile(null);
+      const fileEl = document.getElementById("pdfInput");
+      if (fileEl) fileEl.value = "";
       setSelected(null);
       setJudul("");
       setQuery("");
@@ -223,6 +228,8 @@ export default function UploadPdf({ kind }) {
       await loadHistory();
     } catch (e) {
       setAlert({ type: "danger", text: `Gagal mengunggah: ${e.message}` });
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -558,8 +565,8 @@ export default function UploadPdf({ kind }) {
           <button className="btn" onClick={() => setOpen(false)}>
             Batal
           </button>
-          <button className="btn" onClick={submit}>
-            Unggah
+          <button className="btn" onClick={submit} disabled={uploading}>
+            {uploading ? "Mengunggah…" : "Unggah"}
           </button>
         </div>
       </Modal>

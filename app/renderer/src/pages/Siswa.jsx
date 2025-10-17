@@ -44,6 +44,13 @@ export default function Siswa() {
     }, 0);
   }
 
+  // Jenis Pendidikan aktif (disimpan saat login)
+  const jenis = useMemo(
+    () => localStorage.getItem("sa.jenis_pendidikan") || "",
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [localStorage.getItem("sa.jenis_pendidikan")]
+  );
+
   // =================== data & filters ===================
   // load opsi angkatan 1x
   useEffect(() => {
@@ -51,7 +58,9 @@ export default function Siswa() {
     (async () => {
       try {
         const token = await window.authAPI?.getToken?.();
-        const r = await fetch(`${API}/ref/angkatan`, {
+        const url = new URL(`${API}/ref/angkatan`);
+        if (jenis) url.searchParams.set("jenis", jenis); // <== TAMBAH: filter jenis pendidikan
+        const r = await fetch(url.toString(), {
           headers: {
             Accept: "application/json",
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -65,7 +74,7 @@ export default function Siswa() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [jenis]);
 
   const angkatanEffective = angkatanFilter || angkatanFromShell || "";
 
@@ -74,12 +83,13 @@ export default function Siswa() {
     const u = new URL(`${API}/siswa`);
     if (q) u.searchParams.set("q", q);
     if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
+    if (jenis) u.searchParams.set("jenis", jenis); // <== TAMBAH: filter jenis pendidikan
     u.searchParams.set("page", String(page));
     u.searchParams.set("limit", String(limit));
     u.searchParams.set("sort_by", sortBy);
     u.searchParams.set("sort_dir", sortDir);
     return u.toString();
-  }, [q, page, limit, sortBy, sortDir, angkatanEffective]);
+  }, [q, page, limit, sortBy, sortDir, angkatanEffective, jenis]);
 
   // fetch data
   useEffect(() => {
@@ -115,6 +125,7 @@ export default function Siswa() {
     const u = new URL(`${API}/export/siswa.xlsx`);
     if (q) u.searchParams.set("q", q);
     if (angkatanEffective) u.searchParams.set("angkatan", angkatanEffective);
+    if (jenis) u.searchParams.set("jenis", jenis); // <== TAMBAH: filter jenis pendidikan
     u.searchParams.set("sort_by", sortBy);
     u.searchParams.set("sort_dir", sortDir);
     u.searchParams.set("all", "1"); // ekspor semua sesuai filter
@@ -232,7 +243,6 @@ export default function Siswa() {
       const fname = `siswa${labelAngkatan}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
 
       if (window.electronAPI?.download) {
-        // Electron: tampilkan info lokasi default
         const info = await window.electronAPI
           .getDefaultDownloadsDir?.()
           .catch(() => null);
@@ -256,10 +266,9 @@ export default function Siswa() {
           title: "Selesai",
           message: `Tersimpan: ${fullPath}`,
           indeterminate: false,
-          duration: SUCCESS_CLOSE_MS, // auto-close
+          duration: SUCCESS_CLOSE_MS,
         });
       } else {
-        // Dev/browser fallback
         await downloadViaFetchWithProgress(url, fname);
       }
     } catch (e) {
