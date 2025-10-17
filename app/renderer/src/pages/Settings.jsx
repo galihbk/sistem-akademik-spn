@@ -1,41 +1,42 @@
 // renderer/src/pages/Settings.jsx
 import { useEffect, useState } from "react";
 
+const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
 export default function Settings() {
   const [askWhere, setAskWhere] = useState(false);
   const [saveFolder, setSaveFolder] = useState("");
   const [exportFolder, setExportFolder] = useState("");
   const [msg, setMsg] = useState("");
-  const [lastBackupAt, setLastBackupAt] = useState(null); // ⬅️ BARU
+  const [busy, setBusy] = useState(false);
 
-  const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
+  // Info backup lokal (client)
+  const [lastLocalBackup, setLastLocalBackup] = useState(null);
 
-  // helper format tanggal lokal (Asia/Jakarta)
-  function fmtLocal(iso) {
+  function fmtLocal(isoOrMs) {
     try {
-      const d = new Date(iso);
+      const d =
+        typeof isoOrMs === "number" ? new Date(isoOrMs) : new Date(isoOrMs);
       return new Intl.DateTimeFormat("id-ID", {
         dateStyle: "full",
         timeStyle: "medium",
         timeZone: "Asia/Jakarta",
       }).format(d);
     } catch {
-      return iso || "-";
+      return isoOrMs || "-";
     }
   }
 
-  async function fetchLatestBackup() {
+  async function fetchLocalLatestBackup() {
     try {
-      const res = await fetch(`${API}/api/admin/backup/latest`);
-      if (!res.ok) return;
-      const j = await res.json();
-      if (j?.ok && j.exists && j.lastBackupISO) {
-        setLastBackupAt(j.lastBackupISO);
+      const info = await window.electronAPI?.backupLastLocal?.();
+      if (info && info.exists) {
+        setLastLocalBackup({ path: info.path, mtimeMs: info.mtimeMs });
       } else {
-        setLastBackupAt(null);
+        setLastLocalBackup(null);
       }
     } catch {
-      // diamkan saja; jangan ganggu UI
+      setLastLocalBackup(null);
     }
   }
 
@@ -44,12 +45,13 @@ export default function Settings() {
     (async () => {
       try {
         const s = await window.electronAPI?.getSettings?.();
-        if (!alive || !s) return;
-        setAskWhere(!!s.askWhere);
-        setSaveFolder(s.saveFolder || "");
-        setExportFolder(s.exportFolder || "");
-      } catch (e) {}
-      await fetchLatestBackup(); // ⬅️ BARU
+        if (alive && s) {
+          setAskWhere(!!s.askWhere);
+          setSaveFolder(s.saveFolder || "");
+          setExportFolder(s.exportFolder || "");
+        }
+      } catch {}
+      await fetchLocalLatestBackup();
     })();
     return () => {
       alive = false;
@@ -82,78 +84,70 @@ export default function Settings() {
       setMsg("✔️ Pengaturan disimpan.");
       setTimeout(() => setMsg(""), 3000);
     } catch (e) {
-      setMsg(`Gagal menyimpan: ${e.message}`);
+      setMsg(`Gagal menyimpan: ${e?.message || "unknown error"}`);
     }
   }
 
-  // === BACKUP default ===
-  function defaultBackupDir() {
-    return path.join(app.getPath("userData"), "backups");
+  // === Backup ke CLIENT (userData/backups) ===
+  async function runBackupToClient() {
+    setMsg("");
+    setBusy(true);
+    try {
+      // bisa kirim string atau object { apiBase }
+      const r = await window.electronAPI?.runBackup?.(API);
+      if (!r || !r.ok)
+        throw new Error(r?.message || "Gagal membuat backup lokal");
+      setMsg(`✔️ Cadangan lokal dibuat di: ${r.path}`);
+      await fetchLocalLatestBackup();
+    } catch (e) {
+      setMsg(`Gagal membuat cadangan lokal: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  ipcMain.handle("backup:run", async (_evt, apiBase) => {
-    const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15); // YYYYMMDDHHmmss
-    const outDir = defaultBackupDir();
-    const outPath = path.join(outDir, `backup-${ts}.zip`);
-    await fs.promises.mkdir(outDir, { recursive: true });
+  async function openLocalBackupInFolder() {
+    try {
+      if (!lastLocalBackup?.path) return;
+      await window.electronAPI?.openInFolder?.(lastLocalBackup.path);
+    } catch {}
+  }
 
-    const url = new URL("/api/admin/backup/archive.zip", apiBase).toString();
-    const client = url.startsWith("https") ? https : http;
+  // === Restore dari ZIP lokal terbaru ===
+  async function restoreFromLocal() {
+    setMsg("");
+    setBusy(true);
+    try {
+      const r = await window.electronAPI?.restoreFromLocal?.(API);
+      if (!r || !r.ok) throw new Error(r?.message || "Gagal memulihkan");
+      setMsg("✔️ Pemulihan dari cadangan lokal berhasil.");
+    } catch (e) {
+      setMsg(`Gagal memulihkan: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
 
-    await new Promise((resolve, reject) => {
-      const file = fs.createWriteStream(outPath);
-      const req = client.get(url, (res) => {
-        if (res.statusCode !== 200) {
-          file.close();
-          fs.unlink(outPath, () => {});
-          return reject(new Error(`HTTP ${res.statusCode}`));
-        }
-        res.pipe(file);
-        file.on("finish", () => file.close(resolve));
-      });
-      req.on("error", (err) => {
-        file.close();
-        fs.unlink(outPath, () => {});
-        reject(err);
-      });
-    });
-
-    return { ok: true, path: outPath };
-  });
-
-  ipcMain.handle("backup:lastLocal", async () => {
-    const dir = defaultBackupDir();
-    if (!fs.existsSync(dir)) return { exists: false };
-    const names = await fs.promises.readdir(dir);
-    const files = names
-      .filter((n) => n.endsWith(".zip"))
-      .map((n) => path.join(dir, n));
-    if (!files.length) return { exists: false };
-    files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-    return {
-      exists: true,
-      path: files[0],
-      mtimeMs: fs.statSync(files[0]).mtimeMs,
-    };
-  });
-
-  // Upload ZIP lokal ke server untuk restore
-  ipcMain.handle("backup:restoreFromLocal", async (_evt, apiBase) => {
-    const last = (await ipcMain.invoke) ? null : null; // (noop, kita panggil langsung di renderer di bawah)
-    return;
-  });
+  // Guard kecil: jika tidak dijalankan dalam Electron, beri info
+  const inElectron = typeof window !== "undefined" && !!window.electronAPI;
 
   return (
     <div className="grid">
-      {/* ===== Card: Info ===== */}
+      {/* ===== Pengaturan ===== */}
       <div className="card">
         <div style={{ fontWeight: 800, fontSize: 18 }}>Pengaturan</div>
         <div className="muted" style={{ marginTop: 4 }}>
-          Atur lokasi penyimpanan dan proses cadangan/pemulihan data.
+          Atur lokasi penyimpanan & proses cadangan/pemulihan data.
         </div>
+        {!inElectron && (
+          <div style={{ marginTop: 8, color: "#fca5a5" }}>
+            ⚠️ Fitur backup/restore hanya aktif saat aplikasi berjalan di
+            Electron.
+          </div>
+        )}
       </div>
 
-      {/* ===== Card: Penyimpanan ===== */}
+      {/* ===== Penyimpanan ===== */}
       <div className="card">
         <div style={{ fontWeight: 700, marginBottom: 8 }}>
           Penyimpanan Unduhan & Ekspor
@@ -205,46 +199,66 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* ===== Card: Cadangan & Pemulihan ===== */}
+      {/* ===== Cadangan Lokal (Client) ===== */}
       <div className="card">
         <div style={{ fontWeight: 700, marginBottom: 8 }}>
-          Cadangan & Pemulihan Data
+          Cadangan Lokal (Client)
         </div>
+        <div className="muted" style={{ marginBottom: 8 }}>
+          ZIP disimpan otomatis ke <code>userData/backups</code> (tanpa dialog).
+        </div>
+
         <div className="muted" style={{ marginBottom: 12 }}>
-          Cadangan disimpan otomatis ke <code>backups/&lt;timestamp&gt;/</code>{" "}
-          berisi <code>db.sql</code> dan <code>uploads/</code>.
+          <strong>Pencadangan lokal terakhir:</strong>{" "}
+          {lastLocalBackup ? (
+            <>
+              {fmtLocal(lastLocalBackup.mtimeMs)} —{" "}
+              <code>{lastLocalBackup.path}</code>
+            </>
+          ) : (
+            <em>belum ada</em>
+          )}
         </div>
 
-        {/* ⬇️ BARU: Tanggal terakhir */}
-        <div className="muted" style={{ marginBottom: 12 }}>
-          <strong>Pencadangan terakhir:</strong>{" "}
-          {lastBackupAt ? fmtLocal(lastBackupAt) : <em>belum ada</em>}
-        </div>
-
-        <div
-          style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}
-        >
-          <button className="btn" type="button" onClick={runBackup}>
-            Buat Cadangan Sekarang
-          </button>
-          <button className="btn" type="button" onClick={restoreBackup}>
-            Pulihkan (snapshot terbaru)
-          </button>
-        </div>
-
-        {msg && (
-          <div
-            style={{
-              marginTop: 10,
-              color: msg.startsWith("✔") ? "#86efac" : "#fca5a5",
-            }}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            className="btn"
+            onClick={runBackupToClient}
+            disabled={busy || !inElectron}
           >
-            {msg}
-          </div>
-        )}
+            {busy ? "Memproses…" : "Buat Cadangan ke Client"}
+          </button>
+          <button
+            className="btn"
+            onClick={openLocalBackupInFolder}
+            disabled={!lastLocalBackup?.path || busy || !inElectron}
+          >
+            Buka Folder Cadangan
+          </button>
+          <button
+            className="btn"
+            onClick={restoreFromLocal}
+            disabled={!lastLocalBackup?.path || busy || !inElectron}
+          >
+            Pulihkan dari Cadangan Lokal
+          </button>
+        </div>
       </div>
 
-      {/* ===== Card: Info Aplikasi ===== */}
+      {/* ===== Status / Info ===== */}
+      {msg && (
+        <div
+          className="card"
+          style={{
+            borderColor: msg.startsWith("✔") ? "#22c55e" : "#ef4444",
+          }}
+        >
+          <div style={{ color: msg.startsWith("✔") ? "#86efac" : "#fca5a5" }}>
+            {msg}
+          </div>
+        </div>
+      )}
+
       <div className="card">
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Info Aplikasi</div>
         <div style={{ color: "#cbd5e1" }}>

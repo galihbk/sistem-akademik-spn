@@ -1,3 +1,4 @@
+// routes/siswa.routes.js
 const router = require("express").Router();
 const ctrl = require("../controllers/siswa.controller");
 const multer = require("multer");
@@ -18,22 +19,24 @@ router.get("/nik/:nik", ctrl.detailByNik);
 router.get("/nosis/:nosis", ctrl.detailByNosis);
 
 // ====== Relasi by NIK ======
-// HAPUS kalau sudah tidak dipakai: router.get("/nik/:nik/sosiometri", ctrl.listSosiometri);
 router.get("/nik/:nik/mental", ctrl.listMental);
 router.get("/nik/:nik/bk", ctrl.listBK);
 router.get("/nik/:nik/pelanggaran", ctrl.listPelanggaran);
 router.get("/nik/:nik/mapel", ctrl.listMapel);
 router.get("/nik/:nik/prestasi", ctrl.listPrestasi);
+
+// Jasmani (biasa) → sekarang membaca dari VIEW v_jasmani_itemized
 router.get("/nik/:nik/jasmani", ctrl.listJasmani);
+
 router.get("/nik/:nik/riwayat_kesehatan", ctrl.listRiwayatKesehatan);
-router.get("/nik/:nik/jasmani_polda", ctrl.listJasmaniPolda); // ⬅️ baru
+router.get("/nik/:nik/jasmani_polda", ctrl.listJasmaniPolda);
 
 // Ranking mental
 router.get("/nik/:nik/mental/rank", ctrl.rankMentalByNik);
 
 // ====== Write ======
 router.post("/upsert", ctrl.upsertByNik);
-router.patch("/nik/:nik", ctrl.updatePartialByNik); // ⬅️ baru
-router.post("/nik/:nik/foto", upload.single("foto"), ctrl.uploadFotoByNik); // ⬅️ baru
+router.patch("/nik/:nik", ctrl.updatePartialByNik);
+router.post("/nik/:nik/foto", upload.single("foto"), ctrl.uploadFotoByNik);
 
 module.exports = router;

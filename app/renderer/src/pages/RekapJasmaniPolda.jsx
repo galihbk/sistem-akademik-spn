@@ -56,6 +56,7 @@ export default function RekapJasmaniPolda() {
   }, []);
 
   // load opsi siswa
+  // load opsi siswa
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -63,23 +64,23 @@ export default function RekapJasmaniPolda() {
         setLoadingSiswa(true);
         const token = await window.authAPI?.getToken?.();
 
-        let r = await fetch(`${API}/ref/siswa-min`, {
+        const r = await fetch(`${API}/siswa?min=1&limit=5000`, {
           headers: {
             Accept: "application/json",
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
         });
 
-        if (!r.ok) {
-          r = await fetch(`${API}/siswa?min=1&limit=5000`, {
-            headers: {
-              Accept: "application/json",
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-          });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+        // robust parse (antisipasi HTML error page)
+        let data = {};
+        try {
+          data = await r.json();
+        } catch {
+          data = {};
         }
 
-        const data = await r.json();
         const arr = Array.isArray(data.items)
           ? data.items
           : Array.isArray(data)

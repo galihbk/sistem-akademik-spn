@@ -1,10 +1,12 @@
-// controllers/backup.controller.js
+// server/src/controllers/backup.controller.js
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const fsp = fs.promises;
 const { parse } = require("pg-connection-string");
+const archiver = require("archiver");
 
+// === Paths & ENV ===
 const PROJECT_ROOT = process.env.PROJECT_ROOT
   ? path.resolve(process.env.PROJECT_ROOT)
   : path.resolve(process.cwd());
@@ -19,7 +21,7 @@ const BACKUP_ROOT = process.env.BACKUP_DIR
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
-/* ===================== Utils ===================== */
+// === Utils ===
 function tsStamp() {
   const d = new Date();
   const p2 = (n) => String(n).padStart(2, "0");
@@ -36,6 +38,7 @@ async function ensureDir(p) {
 async function cpRecursive(src, dst) {
   if (!fs.existsSync(src)) return;
   if (fsp.cp) return fsp.cp(src, dst, { recursive: true, force: true });
+
   const st = await fsp.stat(src);
   if (st.isDirectory()) {
     await ensureDir(dst);
@@ -71,9 +74,9 @@ async function latestSnapshot(root) {
   return list[0] || null;
 }
 
-/* ===================== Handlers ===================== */
+// === Controllers ===
 
-// Debug info lokasi uploads
+// Info debug lokasi & hitung file uploads
 const debugInfo = async (_req, res) => {
   try {
     let count = 0;
@@ -101,7 +104,7 @@ const debugInfo = async (_req, res) => {
   }
 };
 
-// Stream dump DB → db.sql (text)
+// Stream hasil pg_dump langsung sebagai db.sql
 const streamDbSql = (req, res) => {
   if (!DATABASE_URL) {
     res.status(500).json({ error: "DATABASE_URL tidak diset" });
@@ -133,14 +136,14 @@ const streamDbSql = (req, res) => {
 
   pg.on("error", (e) => res.status(500).end(`pg_dump error: ${e.message}\n`));
   pg.stdout.pipe(res);
-  pg.stderr.on("data", () => {}); // info non fatal
+  pg.stderr.on("data", () => {}); // abaikan log
   pg.on("close", (code) => {
     if (code !== 0 && !res.headersSent)
       res.status(500).end(`pg_dump exited with code ${code}\n`);
   });
 };
 
-// List isi uploads → JSON
+// List file di uploads (JSON)
 const listUploads = async (_req, res) => {
   try {
     const base = path.resolve(UPLOAD_DIR);
@@ -150,9 +153,8 @@ const listUploads = async (_req, res) => {
       const entries = await fsp.readdir(dir, { withFileTypes: true });
       for (const ent of entries) {
         const abs = path.join(dir, ent.name);
-        if (ent.isDirectory()) {
-          await walk(abs);
-        } else if (ent.isFile()) {
+        if (ent.isDirectory()) await walk(abs);
+        else if (ent.isFile()) {
           const rel = path.relative(base, abs).replace(/\\/g, "/");
           const st = await fsp.stat(abs);
           list.push({ path: rel, size: st.size, mtimeMs: st.mtimeMs });
@@ -162,6 +164,7 @@ const listUploads = async (_req, res) => {
 
     if (!fs.existsSync(base))
       return res.json({ base, items: [], note: "UPLOAD_DIR not found" });
+
     await walk(base);
     res.json({ base, items: list });
   } catch (e) {
@@ -169,12 +172,12 @@ const listUploads = async (_req, res) => {
   }
 };
 
-// Stream satu berkas upload by ?p=relative/path
+// Stream satu file upload via ?p=relative/path
 const streamUploadFile = (req, res) => {
   try {
     const relRaw = String(req.query.p || "");
     const rel = relRaw.replace(/^\/+/, "");
-    const safe = rel.replace(/\.\.+/g, ""); // cegah ../
+    const safe = rel.replace(/\.\.+/g, "");
     const base = path.resolve(UPLOAD_DIR);
     const abs = path.resolve(base, safe);
 
@@ -189,7 +192,7 @@ const streamUploadFile = (req, res) => {
         rel: safe,
         base,
         abs,
-        hint: "Periksa UPLOAD_DIR & apakah file benar-benar ada di path ini.",
+        hint: "Periksa UPLOAD_DIR & path file.",
       });
     }
 
@@ -204,7 +207,7 @@ const streamUploadFile = (req, res) => {
   }
 };
 
-// Backup ke lokasi default: BACKUP_ROOT/<timestamp>/{db.sql, uploads/**}
+// Backup: buat snapshot BACKUP_ROOT/<timestamp>/{db.sql, uploads/**}
 const backupNow = async (_req, res) => {
   try {
     if (!DATABASE_URL) throw new Error("DATABASE_URL tidak diset");
@@ -215,7 +218,7 @@ const backupNow = async (_req, res) => {
     const dbSqlPath = path.join(snapshotDir, "db.sql");
     await ensureDir(snapshotDir);
 
-    // 1) Dump DB ke file
+    // 1) Dump DB → db.sql
     const cfg = parse(DATABASE_URL);
     const args = [
       "-h",
@@ -250,7 +253,7 @@ const backupNow = async (_req, res) => {
       });
     });
 
-    // 2) Salin uploads/ bila ada
+    // 2) Copy uploads jika ada
     if (fs.existsSync(UPLOAD_DIR)) {
       await cpRecursive(UPLOAD_DIR, uploadsDst);
     }
@@ -271,12 +274,12 @@ const latestBackupInfo = async (_req, res) => {
     const last = await latestSnapshot(BACKUP_ROOT);
     if (!last) return res.json({ ok: true, exists: false });
 
-    // Parse dari nama folder (YYYYMMDD-HHmmss)
+    // Ambil waktu dari nama folder YYYYMMDD-HHmmss jika bisa
     let parsed = null;
     const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(last.name);
     if (m) {
       const [, Y, Mo, D, H, Mi, S] = m;
-      parsed = new Date(`${Y}-${Mo}-${D}T${H}:${Mi}:${S}Z`); // UTC
+      parsed = new Date(`${Y}-${Mo}-${D}T${H}:${Mi}:${S}Z`);
     }
     res.json({
       ok: true,
@@ -293,12 +296,50 @@ const latestBackupInfo = async (_req, res) => {
   }
 };
 
-/* ===================== Exports ===================== */
+// ZIP-kan snapshot terbaru (jika belum ada → buat dulu), lalu stream ke client
+const downloadArchiveZip = async (req, res) => {
+  try {
+    let snap = await latestSnapshot(BACKUP_ROOT);
+    if (!snap) {
+      // buat dulu snapshot
+      await backupNow(
+        req,
+        { json: () => {} } // dummy response
+      );
+      snap = await latestSnapshot(BACKUP_ROOT);
+      if (!snap) throw new Error("Gagal membuat snapshot.");
+    }
+
+    const outName = `${path.basename(snap.path)}.zip`;
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${outName}"`);
+
+    const archive = archiver("zip", { zlib: { level: 9 } });
+    archive.on("error", (err) => {
+      if (!res.headersSent) res.status(500);
+      res.end(`archive error: ${err.message}`);
+    });
+
+    archive.pipe(res);
+
+    const dbFile = path.join(snap.path, "db.sql");
+    if (fs.existsSync(dbFile)) archive.file(dbFile, { name: "db.sql" });
+
+    const upDir = path.join(snap.path, "uploads");
+    if (fs.existsSync(upDir)) archive.directory(upDir, "uploads");
+
+    await archive.finalize();
+  } catch (e) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+};
+
 module.exports = {
   debugInfo,
   streamDbSql,
   listUploads,
   streamUploadFile,
-  backupNow, // <-- dipakai router POST /admin/backup
-  latestBackupInfo, // <-- dipakai GET /admin/backup/latest
+  backupNow,
+  latestBackupInfo,
+  downloadArchiveZip,
 };

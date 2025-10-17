@@ -487,38 +487,62 @@ ipcMain.handle("downloads:openInFolder", async (_e, fullPath) => {
   }
 });
 
+/* ================== BACKUP & RESTORE ================== */
 function defaultBackupDir() {
   return path.join(app.getPath("userData"), "backups");
 }
 
-ipcMain.handle("backup:run", async (_evt, apiBase) => {
-  const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15); // YYYYMMDDHHmmss
-  const outDir = defaultBackupDir();
-  const outPath = path.join(outDir, `backup-${ts}.zip`);
-  await fs.promises.mkdir(outDir, { recursive: true });
+async function getLastLocalBackupFile() {
+  const dir = defaultBackupDir();
+  if (!fs.existsSync(dir)) return null;
+  const names = await fs.promises.readdir(dir);
+  const files = names
+    .filter((n) => n.endsWith(".zip"))
+    .map((n) => path.join(dir, n));
+  if (!files.length) return null;
+  files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  return files[0];
+}
 
-  const url = new URL("/api/admin/backup/archive.zip", apiBase).toString();
-  const client = url.startsWith("https") ? https : http;
+ipcMain.handle("backup:run", async (_evt, apiBaseOrOpts) => {
+  try {
+    const apiBase =
+      typeof apiBaseOrOpts === "string"
+        ? apiBaseOrOpts
+        : apiBaseOrOpts?.apiBase ||
+          process.env.API_BASE ||
+          "http://localhost:4000";
 
-  await new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(outPath);
-    const req = client.get(url, (res) => {
-      if (res.statusCode !== 200) {
+    const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15); // YYYYMMDDHHmmss
+    const outDir = defaultBackupDir();
+    const outPath = path.join(outDir, `backup-${ts}.zip`);
+    await fs.promises.mkdir(outDir, { recursive: true });
+
+    const url = new URL("/api/admin/backup/archive.zip", apiBase).toString();
+    const client = url.startsWith("https") ? https : http;
+
+    await new Promise((resolve, reject) => {
+      const file = fs.createWriteStream(outPath);
+      const req = client.get(url, (res) => {
+        if (res.statusCode !== 200) {
+          file.close();
+          fs.unlink(outPath, () => {});
+          return reject(new Error(`HTTP ${res.statusCode}`));
+        }
+        res.pipe(file);
+        file.on("finish", () => file.close(resolve));
+      });
+      req.on("error", (err) => {
         file.close();
         fs.unlink(outPath, () => {});
-        return reject(new Error(`HTTP ${res.statusCode}`));
-      }
-      res.pipe(file);
-      file.on("finish", () => file.close(resolve));
+        reject(err);
+      });
     });
-    req.on("error", (err) => {
-      file.close();
-      fs.unlink(outPath, () => {});
-      reject(err);
-    });
-  });
 
-  return { ok: true, path: outPath };
+    return { ok: true, path: outPath };
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
 });
 
 ipcMain.handle("backup:lastLocal", async () => {
@@ -537,8 +561,71 @@ ipcMain.handle("backup:lastLocal", async () => {
   };
 });
 
-// Upload ZIP lokal ke server untuk restore
-ipcMain.handle("backup:restoreFromLocal", async (_evt, apiBase) => {
-  const last = (await ipcMain.invoke) ? null : null; // (noop, kita panggil langsung di renderer di bawah)
-  return;
+// Upload ZIP lokal ke server untuk restore (multipart/form-data)
+ipcMain.handle("backup:restoreFromLocal", async (_evt, apiBaseOrOpts) => {
+  try {
+    const apiBase =
+      typeof apiBaseOrOpts === "string"
+        ? apiBaseOrOpts
+        : apiBaseOrOpts?.apiBase ||
+          process.env.API_BASE ||
+          "http://localhost:4000";
+
+    const zipPath = await getLastLocalBackupFile();
+    if (!zipPath)
+      return { ok: false, message: "Backup ZIP lokal tidak ditemukan." };
+
+    const boundary = "----ElectronFormData" + Date.now();
+    const urlObj = new URL("/api/admin/restore", apiBase);
+    const isHttps = urlObj.protocol === "https:";
+    const client = isHttps ? https : http;
+
+    const opts = {
+      method: "POST",
+      hostname: urlObj.hostname,
+      port: urlObj.port || (isHttps ? 443 : 80),
+      path: urlObj.pathname + (urlObj.search || ""),
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+      rejectUnauthorized: false, // dev local/self-signed
+    };
+
+    const head =
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${path.basename(
+        zipPath
+      )}"\r\n` +
+      `Content-Type: application/zip\r\n\r\n`;
+    const tail = `\r\n--${boundary}--\r\n`;
+
+    await new Promise((resolve, reject) => {
+      const req = client.request(opts, (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => (body += c));
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve();
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${body || "(no body)"}`));
+          }
+        });
+      });
+      req.on("error", reject);
+
+      req.write(head);
+      const file = fs.createReadStream(zipPath);
+      file.on("error", reject);
+      file.on("end", () => {
+        req.write(tail);
+        req.end();
+      });
+      file.pipe(req, { end: false });
+    });
+
+    return { ok: true, path: zipPath };
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
 });

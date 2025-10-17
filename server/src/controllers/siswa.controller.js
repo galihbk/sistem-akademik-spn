@@ -1,14 +1,146 @@
+// controllers/siswa.controller.js
 const path = require("path");
 const fs = require("fs/promises");
 const pool = require("../db/pool");
 
+// =====================================================
+// JASMANI (biasa) ambil dari VIEW yang cocok dgn UI:
+//   v_jasmani_itemized  (kolom: item, nilai, keterangan, created_at, ...)
+// =====================================================
+const TABLE_JASMANI_LABEL = "v_jasmani_itemized";
+const TABLE_JASMANI_IDENT = "v_jasmani_itemized";
+
+// ======================== UTIL DB =====================
+
+/** Cek objek ada (table / view / matview) */
+async function schemaHasTable(schema, tableLabel) {
+  const q = `
+    SELECT 1
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1
+      AND c.relname = $2
+      AND c.relkind IN ('r','v','m')
+    LIMIT 1;
+  `;
+  const r = await pool.query(q, [schema, tableLabel]);
+  return r.rowCount > 0;
+}
+
+/** Ambil daftar kolom + map lower->original (buat quoting yang aman) */
+async function getTableColumns(schema, tableLabel) {
+  const q = `
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = $2
+  `;
+  const r = await pool.query(q, [schema, tableLabel]);
+  const cols = r.rows.map((x) => x.column_name);
+  const lowerMap = new Map(cols.map((c) => [c.toLowerCase(), c]));
+  return { cols, lowerMap };
+}
+
+/** Helper: ambil siswa_id by NIK */
+async function getSiswaIdByNik(nik) {
+  const r = await pool.query(`SELECT id FROM siswa WHERE nik = $1 LIMIT 1`, [
+    nik,
+  ]);
+  return r.rowCount ? r.rows[0].id : null;
+}
+
 /**
- * GET /siswa?q=&page=1&limit=20&sort_by=nama|nik|nosis&sort_dir=asc|desc&angkatan=XXXX
+ * Ambil baris by NIK dengan prioritas:
+ *   1) "siswa_id" = id siswa (exact)
+ *   2) "nik" = nik (case/trim-insensitive)
+ *   3) "siswa_nik" = nik (case/trim-insensitive)
+ *   4) "nosis" = nosis siswa (case/trim-insensitive)
+ *
+ * ORDER BY pakai kolom yang tersedia: created_at/updated_at/tanggal/tgl/id.
  */
+async function smartRowsByNik(nik, opt) {
+  const { schema = "public", tableLabel, tableIdent } = opt;
+
+  // 0) pastikan objek ada
+  const exists = await schemaHasTable(schema, tableLabel);
+  if (!exists) return [];
+
+  // 1) list kolom
+  const { lowerMap } = await getTableColumns(schema, tableLabel);
+  const has = (name) => lowerMap.has(String(name).toLowerCase());
+  const col = (name) => `"${lowerMap.get(String(name).toLowerCase())}"`;
+
+  // 2) ORDER BY
+  const orderCandidate = [
+    "created_at",
+    "updated_at",
+    "tanggal",
+    "tgl",
+    "createdAt",
+    "updatedAt",
+    "id",
+  ].find((c) => has(c));
+  const orderSql = orderCandidate
+    ? ` ORDER BY ${col(orderCandidate)} NULLS LAST${
+        has("id") && orderCandidate !== "id" ? `, ${col("id")}` : ""
+      }`
+    : "";
+
+  // 3) ambil siswa_id & nosis dari master
+  const siswaId = await getSiswaIdByNik(nik);
+  let nosisByNik = null;
+  if (siswaId) {
+    const rs = await pool.query(
+      `SELECT nosis FROM siswa WHERE id = $1 LIMIT 1`,
+      [siswaId]
+    );
+    nosisByNik = rs.rowCount ? rs.rows[0].nosis : null;
+  }
+
+  // helper WHERE exact (untuk integer id) & insensitive (text)
+  async function tryWhereExact(colName, value) {
+    if (!has(colName) || value == null) return null;
+    const sql = `SELECT * FROM ${tableIdent} WHERE ${col(
+      colName
+    )} = $1${orderSql};`;
+    const r = await pool.query(sql, [value]);
+    return r.rowCount ? r.rows : null;
+  }
+  async function tryWhereInsensitive(colName, value) {
+    if (!has(colName) || value == null) return null;
+    const sql = `SELECT * FROM ${tableIdent}
+                 WHERE TRIM(LOWER(${col(
+                   colName
+                 )})) = TRIM(LOWER($1))${orderSql};`;
+    const r = await pool.query(sql, [String(value)]);
+    return r.rowCount ? r.rows : null;
+  }
+
+  // 4) prioritas filter
+  if (siswaId) {
+    const r1 = await tryWhereExact("siswa_id", siswaId);
+    if (r1) return r1;
+  }
+  const r2 = await tryWhereInsensitive("nik", nik);
+  if (r2) return r2;
+
+  const r3 = await tryWhereInsensitive("siswa_nik", nik);
+  if (r3) return r3;
+
+  if (nosisByNik) {
+    const r4 = await tryWhereInsensitive("nosis", nosisByNik);
+    if (r4) return r4;
+  }
+
+  return [];
+}
+
+// ================= HANDLER LIST/DETAIL SISWA ================
+
+/** GET /siswa */
 async function list(req, res) {
   try {
     const q = (req.query.q || "").trim().toLowerCase();
-    const angkatan = (req.query.angkatan || "").trim(); // << tambah ini
+    const angkatan = (req.query.angkatan || "").trim();
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const limit = Math.min(
       Math.max(parseInt(req.query.limit || "20", 10), 1),
@@ -34,8 +166,6 @@ async function list(req, res) {
       params.push(`%${q}%`);
       where += ` AND (LOWER(nama) LIKE $${params.length} OR LOWER(nosis) LIKE $${params.length})`;
     }
-
-    // << filter angkatan (pakai kolom kelompok_angkatan)
     if (angkatan) {
       params.push(angkatan);
       where += ` AND TRIM(kelompok_angkatan) = TRIM($${params.length})`;
@@ -54,6 +184,7 @@ async function list(req, res) {
       pool.query(sqlData, params),
       pool.query(sqlCount, params),
     ]);
+
     res.json({
       items: data.rows,
       total: count.rows[0].total,
@@ -62,7 +193,7 @@ async function list(req, res) {
       sort_by: sortBy,
       sort_dir: sortDir,
       q,
-      angkatan, // << kembalikan untuk UI
+      angkatan,
     });
   } catch (e) {
     console.error("[siswa.list]", e);
@@ -70,10 +201,7 @@ async function list(req, res) {
   }
 }
 
-/**
- * GET /siswa/nik/:nik
- * Detail berbasis NIK (unik)
- */
+/** GET /siswa/nik/:nik */
 async function detailByNik(req, res) {
   try {
     const { nik } = req.params;
@@ -89,10 +217,7 @@ async function detailByNik(req, res) {
   }
 }
 
-/**
- * (Legacy) GET /siswa/nosis/:nosis
- * Hanya jika masih butuh endpoint lama.
- */
+/** (Legacy) GET /siswa/nosis/:nosis */
 async function detailByNosis(req, res) {
   try {
     const { nosis } = req.params;
@@ -108,29 +233,18 @@ async function detailByNosis(req, res) {
   }
 }
 
-/** Helper: ambil siswa_id dari NIK */
-async function getSiswaIdByNik(nik) {
-  const r = await pool.query(`SELECT id FROM siswa WHERE nik = $1 LIMIT 1`, [
-    nik,
-  ]);
-  return r.rowCount ? r.rows[0].id : null;
-}
+// ================= RELASI (BY NIK) =================
 
-/** Helper: cek tabel ada */
-async function tableExists(table) {
-  const chk = await pool.query(`SELECT to_regclass($1) AS tname`, [
-    `public.${table}`,
-  ]);
-  return !!chk.rows[0].tname;
-}
-
-async function sendRowsOrEmptyByNik(res, table, nik) {
+async function sendRowsOrEmptyByNik_legacy(res, table, nik) {
   try {
-    if (!(await tableExists(table))) return res.json([]);
+    const chk = await pool.query(`SELECT to_regclass($1) AS tname`, [
+      `public.${table}`,
+    ]);
+    if (!chk.rows[0].tname) return res.json([]);
+
     const siswaId = await getSiswaIdByNik(nik);
     if (!siswaId) return res.json([]);
 
-    // urut default: created_at kalau ada; fallback ke id
     const { rows } = await pool.query(
       `SELECT * FROM ${table} WHERE siswa_id = $1 ORDER BY COALESCE(created_at, NOW()), id`,
       [siswaId]
@@ -143,117 +257,76 @@ async function sendRowsOrEmptyByNik(res, table, nik) {
 }
 
 async function listMental(req, res) {
-  return sendRowsOrEmptyByNik(res, "mental", req.params.nik);
+  return sendRowsOrEmptyByNik_legacy(res, "mental", req.params.nik);
 }
 async function listBK(req, res) {
-  return sendRowsOrEmptyByNik(res, "bk", req.params.nik);
+  return sendRowsOrEmptyByNik_legacy(res, "bk", req.params.nik);
 }
 async function listPelanggaran(req, res) {
-  return sendRowsOrEmptyByNik(res, "pelanggaran", req.params.nik);
+  return sendRowsOrEmptyByNik_legacy(res, "pelanggaran", req.params.nik);
 }
 async function listMapel(req, res) {
-  return sendRowsOrEmptyByNik(res, "mapel", req.params.nik);
+  return sendRowsOrEmptyByNik_legacy(res, "mapel", req.params.nik);
 }
 async function listPrestasi(req, res) {
-  return sendRowsOrEmptyByNik(res, "prestasi", req.params.nik);
+  return sendRowsOrEmptyByNik_legacy(res, "prestasi", req.params.nik);
 }
+
+/** GET /siswa/nik/:nik/jasmani  → dari VIEW v_jasmani_itemized */
 async function listJasmani(req, res) {
-  return sendRowsOrEmptyByNik(res, "jasmani", req.params.nik);
-}
-async function listRiwayatKesehatan(req, res) {
-  return sendRowsOrEmptyByNik(res, "riwayat_kesehatan", req.params.nik);
-}
-
-/**
- * POST /siswa/upsert
- * Body minimal: { nik: "...", ...kolom lain... }
- * - Jika NIK ada → update kolom yang dikirim
- * - Jika belum ada → insert
- */
-async function upsertByNik(req, res) {
   try {
-    const payload = req.body || {};
-    const { nik } = payload;
-    if (!nik) return res.status(400).json({ message: "nik wajib diisi" });
+    const nik = (req.params.nik || "").trim();
+    if (!nik) return res.json([]);
 
-    // Kolom yang diizinkan
-    const allowed = [
-      "nik",
-      "nosis",
-      "nama",
-      "file_ktp",
-      "alamat",
-      "tempat_lahir",
-      "tanggal_lahir",
-      "umur",
-      "agama",
-      "jenis_kelamin",
-      "email",
-      "no_hp",
-      "dikum_akhir",
-      "jurusan",
-      "tb",
-      "bb",
-      "gol_darah",
-      "no_bpjs",
-      "sim_yang_dimiliki",
-      "no_hp_keluarga",
-      "nama_ayah_kandung",
-      "nama_ibu_kandung",
-      "pekerjaan_ayah_kandung",
-      "pekerjaan_ibu_kandung",
-      "asal_polda",
-      "asal_polres",
-      "kelompok_angkatan",
-      "diktuk_awal",
-      "tahun_diktuk",
-      "personel",
-      "ukuran_pakaian",
-      "ukuran_celana",
-      "ukuran_sepatu",
-      "ukuran_tutup_kepala",
-      "jenis_rekrutmen",
-      "foto",
-      "batalion",
-    ];
+    // 1) Cari siswa_id dari master siswa
+    const r = await pool.query(`SELECT id FROM siswa WHERE nik = $1 LIMIT 1`, [
+      nik,
+    ]);
+    if (!r.rowCount) return res.json([]); // siswa tidak ada
+    const siswaId = r.rows[0].id;
 
-    const cols = [];
-    const vals = [];
-    const sets = [];
+    // 2) Gunakan view v_jasmani_itemized jika ada; kalau tidak, fallback ke jasmani_spn
+    const chkView = await pool.query(
+      `SELECT to_regclass('public.v_jasmani_itemized') AS tname`
+    );
+    const hasView = !!chkView.rows[0].tname;
 
-    for (const key of allowed) {
-      if (Object.prototype.hasOwnProperty.call(payload, key)) {
-        cols.push(key);
-        vals.push(payload[key]);
-        sets.push(`${key} = EXCLUDED.${key}`);
-      }
+    if (hasView) {
+      const sql = `
+        SELECT *
+        FROM v_jasmani_itemized
+        WHERE siswa_id = $1
+        ORDER BY COALESCE(updated_at, created_at) NULLS LAST, jasmani_spn_id
+      `;
+      const { rows } = await pool.query(sql, [siswaId]);
+      return res.json(rows);
+    } else {
+      // fallback: tabel jasmani_spn langsung
+      const sql = `
+        SELECT *
+        FROM jasmani_spn
+        WHERE siswa_id = $1
+        ORDER BY COALESCE(updated_at, created_at) NULLS LAST, id
+      `;
+      const { rows } = await pool.query(sql, [siswaId]);
+      return res.json(rows);
     }
-    if (!cols.includes("nik")) {
-      // pastikan nik ikut
-      cols.unshift("nik");
-      vals.unshift(nik);
-      sets.unshift("nik = EXCLUDED.nik");
-    }
-
-    const colList = cols.map((c) => `"${c}"`).join(", ");
-    const phList = vals.map((_, idx) => `$${idx + 1}`).join(", ");
-    const setList = sets.join(", ");
-
-    const sql = `
-      INSERT INTO siswa (${colList})
-      VALUES (${phList})
-      ON CONFLICT (nik) DO UPDATE SET
-        ${setList},
-        updated_at = NOW()
-      RETURNING *;
-    `;
-    const r = await pool.query(sql, vals);
-    res.json({ message: "OK", data: r.rows[0] });
   } catch (e) {
-    console.error("[siswa.upsertByNik]", e);
-    res.status(500).json({ message: "Gagal menyimpan data siswa" });
+    console.error("[siswa.listJasmani(strict by siswa_id)]", e);
+    return res.json([]);
   }
 }
+
+async function listRiwayatKesehatan(req, res) {
+  return sendRowsOrEmptyByNik_legacy(res, "riwayat_kesehatan", req.params.nik);
+}
+
+/** GET /siswa/nik/:nik/jasmani_polda */
+async function listJasmaniPolda(req, res) {
+  return sendRowsOrEmptyByNik_legacy(res, "jasmani_polda", req.params.nik);
+}
+
+// ============== RANKING (tetap) ==============
 async function rankMentalByNik(req, res) {
   console.log("test");
   const nikParam = (req.params.nik || "").trim();
@@ -261,7 +334,6 @@ async function rankMentalByNik(req, res) {
 
   if (!nikParam) return res.status(400).json({ error: "NIK is required" });
 
-  // 1) Ambil identitas siswa & angkatan (atau pakai override)
   const qGet = `
     SELECT id, nama, nosis, nik, batalion, ton, kelompok_angkatan
     FROM siswa
@@ -270,9 +342,8 @@ async function rankMentalByNik(req, res) {
   `;
   try {
     const meQ = await pool.query(qGet, [nikParam]);
-    if (!meQ.rows.length) {
+    if (!meQ.rows.length)
       return res.status(404).json({ error: "Siswa tidak ditemukan" });
-    }
     const me = meQ.rows[0];
     const angkatan = angkatanOverride || me.kelompok_angkatan;
     if (!angkatan) {
@@ -282,7 +353,6 @@ async function rankMentalByNik(req, res) {
       });
     }
 
-    // 2) Hitung rata-rata nilai mental (numeric saja) & ranking dalam angkatan tsb
     const sql = `
       WITH base AS (
         SELECT
@@ -293,7 +363,7 @@ async function rankMentalByNik(req, res) {
           s.batalion,
           s.ton,
           s.kelompok_angkatan,
-          UPPER(NULLIF(regexp_replace(s.ton, '[^A-Za-z].*', ''), '')) AS kompi,  -- huruf awal (A1 -> A)
+          UPPER(NULLIF(regexp_replace(s.ton, '[^A-Za-z].*', ''), '')) AS kompi,
           CASE
             WHEN regexp_replace(s.ton, '\\D+', '', 'g') <> ''
               THEN (regexp_replace(s.ton, '\\D+', '', 'g'))::int
@@ -375,7 +445,7 @@ async function rankMentalByNik(req, res) {
       angkatan,
       kompi: r.kompi,
       pleton: r.pleton,
-      avg: r.avg_nilai, // numeric atau null
+      avg: r.avg_nilai,
       rank: {
         global: { pos: r.rank_global, total: r.total_global },
         batalion: { pos: r.rank_batalion, total: r.total_batalion },
@@ -388,12 +458,101 @@ async function rankMentalByNik(req, res) {
     return res.status(500).json({ error: "Internal error" });
   }
 }
+
+// ===================== WRITE ======================
+
+/** POST /siswa/upsert */
+async function upsertByNik(req, res) {
+  try {
+    const payload = req.body || {};
+    const { nik } = payload;
+    if (!nik) return res.status(400).json({ message: "nik wajib diisi" });
+
+    const allowed = [
+      "nik",
+      "nosis",
+      "nama",
+      "file_ktp",
+      "alamat",
+      "tempat_lahir",
+      "tanggal_lahir",
+      "umur",
+      "agama",
+      "jenis_kelamin",
+      "email",
+      "no_hp",
+      "dikum_akhir",
+      "jurusan",
+      "jenis_pendidikan",
+      "tb",
+      "bb",
+      "gol_darah",
+      "no_bpjs",
+      "sim_yang_dimiliki",
+      "no_hp_keluarga",
+      "nama_ayah_kandung",
+      "nama_ibu_kandung",
+      "pekerjaan_ayah_kandung",
+      "pekerjaan_ibu_kandung",
+      "asal_polda",
+      "asal_polres",
+      "kelompok_angkatan",
+      "diktuk_awal",
+      "tahun_diktuk",
+      "personel",
+      "ukuran_pakaian",
+      "ukuran_celana",
+      "ukuran_sepatu",
+      "ukuran_tutup_kepala",
+      "jenis_rekrutmen",
+      "foto",
+      "batalion",
+      "ton",
+    ];
+
+    const cols = [];
+    const vals = [];
+    const sets = [];
+
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(payload, key)) {
+        cols.push(key);
+        vals.push(payload[key]);
+        sets.push(`${key} = EXCLUDED.${key}`);
+      }
+    }
+    if (!cols.includes("nik")) {
+      cols.unshift("nik");
+      vals.unshift(nik);
+      sets.unshift("nik = EXCLUDED.nik");
+    }
+
+    const colList = cols.map((c) => `"${c}"`).join(", ");
+    const phList = vals.map((_, idx) => `$${idx + 1}`).join(", ");
+    const setList = sets.join(", ");
+
+    const sql = `
+      INSERT INTO siswa (${colList})
+      VALUES (${phList})
+      ON CONFLICT (nik) DO UPDATE SET
+        ${setList},
+        updated_at = NOW()
+      RETURNING *;
+    `;
+    const r = await pool.query(sql, vals);
+    res.json({ message: "OK", data: r.rows[0] });
+  } catch (e) {
+    console.error("[siswa.upsertByNik]", e);
+    res.status(500).json({ message: "Gagal menyimpan data siswa" });
+  }
+}
+
+/** PATCH /siswa/nik/:nik */
 async function updatePartialByNik(req, res) {
   try {
     const nikParam = (req.params.nik || "").trim();
     if (!nikParam) return res.status(400).json({ message: "NIK wajib diisi" });
 
-    // whitelist kolom yang boleh diupdate
     const allowed = [
       "nosis",
       "nama",
@@ -408,6 +567,7 @@ async function updatePartialByNik(req, res) {
       "no_hp",
       "dikum_akhir",
       "jurusan",
+      "jenis_pendidikan",
       "tb",
       "bb",
       "gol_darah",
@@ -441,7 +601,7 @@ async function updatePartialByNik(req, res) {
     for (const k of allowed) {
       if (Object.prototype.hasOwnProperty.call(body, k)) {
         sets.push(`"${k}" = $${i++}`);
-        vals.push(body[k]); // boleh null
+        vals.push(body[k]);
       }
     }
     if (sets.length === 0) {
@@ -449,7 +609,6 @@ async function updatePartialByNik(req, res) {
         .status(400)
         .json({ message: "Tidak ada kolom untuk diupdate" });
     }
-    // nik di WHERE
     vals.push(nikParam);
 
     const sql = `
@@ -469,14 +628,12 @@ async function updatePartialByNik(req, res) {
   }
 }
 
-/** ====== POST /siswa/nik/:nik/foto — upload foto ====== */
-// helper pastikan folder ada
+/** POST /siswa/nik/:nik/foto */
 async function ensureDir(p) {
   try {
     await fs.mkdir(p, { recursive: true });
   } catch {}
 }
-
 async function uploadFotoByNik(req, res) {
   try {
     const nikParam = (req.params.nik || "").trim();
@@ -484,7 +641,6 @@ async function uploadFotoByNik(req, res) {
     if (!req.file)
       return res.status(400).json({ message: "file 'foto' wajib ada" });
 
-    // simpan file ke uploads/foto_siswa
     const baseDir = path.join(process.cwd(), "uploads", "foto_siswa");
     await ensureDir(baseDir);
 
@@ -498,10 +654,7 @@ async function uploadFotoByNik(req, res) {
 
     await fs.writeFile(target, req.file.buffer);
 
-    // path yang dipakai UI (sesuaikan dengan /download?path=...)
     const relativePath = `foto_siswa/${filename}`;
-
-    // update DB
     const up = await pool.query(
       `UPDATE siswa SET foto = $1, updated_at = NOW() WHERE nik = $2 RETURNING *`,
       [relativePath, nikParam]
@@ -516,31 +669,28 @@ async function uploadFotoByNik(req, res) {
   }
 }
 
-/** ====== GET /siswa/nik/:nik/jasmani_polda ====== */
-async function listJasmaniPolda(req, res) {
-  return sendRowsOrEmptyByNik(res, "jasmani_polda", req.params.nik);
-}
-
-// --- export tambahkan fungsi baru ---
+// ================== EXPORT HANDLERS ==================
 module.exports = {
+  // list/detail
   list,
   detailByNik,
-  detailByNosis, // optional legacy
+  detailByNosis,
 
+  // relasi by nik
   listMental,
   listBK,
   listPelanggaran,
   listMapel,
   listPrestasi,
-  listJasmani,
+  listJasmani, // ← dari v_jasmani_itemized
   listRiwayatKesehatan,
-  listJasmaniPolda, // ⬅️ baru
+  listJasmaniPolda,
 
   // write
   upsertByNik,
-  updatePartialByNik, // ⬅️ baru
-  uploadFotoByNik, // ⬅️ baru
+  updatePartialByNik,
+  uploadFotoByNik,
 
-  // ranking
+  // rank
   rankMentalByNik,
 };

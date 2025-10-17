@@ -1,3 +1,4 @@
+// src/pages/SiswaDetail.jsx
 import { useEffect, useMemo, useState } from "react";
 import {
   fetchSiswaDetailByNik,
@@ -19,7 +20,7 @@ const TABS = [
   { key: "jasmani_polda", label: "Jasmani Polda" }, // paling akhir
 ];
 
-/* ---------- Utils kecil ---------- */
+/* ========================= Utils ========================= */
 
 function toNumberOrNull(v) {
   if (v == null) return null;
@@ -64,10 +65,8 @@ function buildDownloadUrl(filePath) {
     .replace(/^uploads\//i, "");
   return `${API}/download?path=${encodeURIComponent(clean)}`;
 }
-
-// Untuk preview inline (img/video/audio)
 function buildViewUrl(filePath) {
-  const base = buildDownloadUrl(filePath); // /download?path=...
+  const base = buildDownloadUrl(filePath);
   const sep = base.includes("?") ? "&" : "?";
   return `${base}${sep}inline=1`;
 }
@@ -97,7 +96,7 @@ async function handleDownload(filePath) {
   }
 }
 
-/* ---------- Komponen kecil ---------- */
+/* ===================== Komponen kecil ==================== */
 
 function SummaryItem({ label, children }) {
   return (
@@ -151,64 +150,6 @@ function Field({ label, children }) {
   );
 }
 
-function renderValue(key, val) {
-  if (!val && val !== 0) return "-";
-
-  if (key === "foto") {
-    const raw = String(val);
-    const isAbs =
-      /^https?:\/\//i.test(raw) ||
-      raw.startsWith("data:") ||
-      raw.startsWith("blob:");
-    const src = isAbs ? raw : buildViewUrl(raw); // pakai inline=1
-    return (
-      <img
-        src={src}
-        alt="Foto siswa"
-        style={{
-          width: 180,
-          height: 220,
-          objectFit: "cover",
-          borderRadius: 8,
-          border: "1px solid var(--border)",
-        }}
-        onError={(e) => {
-          e.currentTarget.src =
-            "data:image/svg+xml;utf8," +
-            encodeURIComponent(
-              `<svg xmlns='http://www.w3.org/2000/svg' width='180' height='220'><rect width='100%' height='100%' fill='#0b1220'/><text x='50%' y='50%' fill='#64748b' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='12'>No Photo</text></svg>`
-            );
-        }}
-      />
-    );
-  }
-
-  if (key === "file_ktp") {
-    const href = String(val);
-    return (
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-        style={{ color: "var(--link, #60a5fa)" }}
-      >
-        Lihat KTP
-      </a>
-    );
-  }
-
-  if ((key === "created_at" || key === "updated_at") && val) {
-    try {
-      const d = new Date(val);
-      return d.toLocaleString("id-ID");
-    } catch {
-      return String(val);
-    }
-  }
-
-  return String(val);
-}
-
 function DataTable({ rows }) {
   const headers = useMemo(
     () => (rows?.[0] ? Object.keys(rows[0]) : []),
@@ -244,7 +185,52 @@ function DataTable({ rows }) {
   );
 }
 
-/* ---------- Mental-like table (dipakai untuk Mental, Mapel, Jasmani) ---------- */
+/* ============= DownloadNotice (banner progres) ============ */
+
+function DownloadNotice({ message, percent }) {
+  if (!message && percent == null) return null;
+  return (
+    <div
+      className="card"
+      style={{
+        marginBottom: 8,
+        whiteSpace: "pre-line",
+        border: "1px solid var(--border)",
+        background: "var(--panel)",
+        color: "var(--text)",
+        borderRadius: 10,
+        padding: "10px 12px",
+      }}
+    >
+      {message}
+      {percent != null && (
+        <div style={{ marginTop: 6 }}>
+          Progres: {percent}%
+          <div
+            style={{
+              height: 6,
+              background: "var(--border)",
+              borderRadius: 4,
+              marginTop: 4,
+            }}
+          >
+            <div
+              style={{
+                width: `${Math.max(0, Math.min(100, percent))}%`,
+                height: 6,
+                background: "var(--accent, #60a5fa)",
+                borderRadius: 4,
+                transition: "width .2s linear",
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ===== MentalTable (juga dipakai gaya ringkasan) ===== */
 
 function MentalTable({ rows, rank }) {
   const norm = useMemo(() => {
@@ -355,11 +341,6 @@ function MentalTable({ rows, rank }) {
             }}
           >
             <RankItem
-              label="Global"
-              pos={rank?.rank?.global?.pos}
-              total={rank?.rank?.global?.total}
-            />
-            <RankItem
               label={`Batalion${rank?.batalion ? ` ${rank.batalion}` : ""}`}
               pos={rank?.rank?.batalion?.pos}
               total={rank?.rank?.batalion?.total}
@@ -435,6 +416,8 @@ function MentalTable({ rows, rank }) {
     </>
   );
 }
+
+/* ===================== JasmaniTable ====================== */
 
 function JasmaniTable({ rows, rank }) {
   const norm = useMemo(() => {
@@ -554,11 +537,6 @@ function JasmaniTable({ rows, rank }) {
             }}
           >
             <RankItem
-              label="Global"
-              pos={rank?.rank?.global?.pos}
-              total={rank?.rank?.global?.total}
-            />
-            <RankItem
               label={`Batalion${rank?.batalion ? ` ${rank.batalion}` : ""}`}
               pos={rank?.rank?.batalion?.pos}
               total={rank?.rank?.batalion?.total}
@@ -626,7 +604,7 @@ function JasmaniTable({ rows, rank }) {
   );
 }
 
-/* ---------- MapelTable (DISTINCT mapel, kolom pertemuan dinamis + ringkasan & ranking) ---------- */
+/* =========== MapelTable (dinamis pertemuan) ============ */
 
 function MapelTable({ rows, rank }) {
   const { matrix, mapelList, pertemuanList, stats } = useMemo(() => {
@@ -766,11 +744,6 @@ function MapelTable({ rows, rank }) {
             }}
           >
             <RankItem
-              label="Global"
-              pos={rank?.rank?.global?.pos}
-              total={rank?.rank?.global?.total}
-            />
-            <RankItem
               label={`Batalion${rank?.batalion ? ` ${rank.batalion}` : ""}`}
               pos={rank?.rank?.batalion?.pos}
               total={rank?.rank?.batalion?.total}
@@ -872,52 +845,161 @@ function MapelTable({ rows, rank }) {
   );
 }
 
-/* ---------- DownloadNotice (banner progres) ---------- */
+/* ===== NEW: JasmaniPoldaCards (card per kategori) ===== */
 
-function DownloadNotice({ message, percent }) {
-  if (!message && percent == null) return null;
+/* ===== REPLACE: JasmaniPoldaCards (card simpel per kategori) ===== */
+function JasmaniPoldaCards({ rows }) {
+  // daftar kolom seperti RekapJasmaniPolda.jsx
+  const ANTHRO = [
+    { key: "tb_cm", label: "TB (cm)" },
+    { key: "tb_inchi", label: "TB (inchi)", num: true },
+    { key: "bb_kg", label: "BB (kg)" },
+    { key: "bb_akbb", label: "BB AKBB", num: true },
+    { key: "ratio_index", label: "Ratio" },
+    { key: "somato_type", label: "Somato" },
+    { key: "klasifikasi_tipe_tubuh", label: "Klasifikasi" },
+    { key: "nilai_tipe_tubuh", label: "Nilai Tipe", num: true },
+    { key: "nilai_kelainan", label: "Nilai Kelainan", num: true },
+    { key: "nilai_terkecil", label: "Nilai Terkecil", num: true },
+    { key: "nilai_anthro", label: "Nilai Anthro", num: true },
+    { key: "antro", label: "ANTRO (raw)" },
+    { key: "antro_pembobotan", label: "ANTHRO Pembobotan" },
+    { key: "pencapaian_nbl", label: "NBL" },
+  ];
+
+  const SAMAPTA_RENANG = [
+    { key: "kesamaptaan_hga", label: "Kesamaptaan HGA" },
+    { key: "kesamaptaan_nga", label: "Kesamaptaan NGA" },
+    { key: "pull_up_hgb1", label: "Pull Up HGB1", num: true },
+    { key: "pull_up_ngb1", label: "Pull Up NGB1", num: true },
+    { key: "sit_up_hgb2", label: "Sit Up HGB2", num: true },
+    { key: "sit_up_ngb2", label: "Sit Up NGB2", num: true },
+    { key: "push_up_hgb3", label: "Push Up HGB3", num: true },
+    { key: "push_up_ngb3", label: "Push Up NGB3", num: true },
+    { key: "shuttle_run_hgb4", label: "Shuttle Run HGB4", num: true },
+    { key: "shuttle_run_ngb4", label: "Shuttle Run NGB4", num: true },
+    { key: "renang_jarak", label: "Renang Jarak", num: true },
+    { key: "renang_waktu", label: "Renang Waktu", num: true },
+    { key: "renang_nilai", label: "Renang Nilai", num: true },
+    { key: "renang", label: "Renang (Total)", num: true },
+  ];
+
+  const REKAP = [
+    { key: "nilai_b", label: "Nilai B", num: true },
+    { key: "na_a_b", label: "NA A+B", num: true },
+    { key: "kesamaptaan_a_b", label: "Kesamaptaan A+B", num: true },
+    { key: "renang_x20", label: "Renang ×20", num: true },
+    { key: "samapta_x80", label: "Samapta ×80", num: true },
+    { key: "nilai_akhir", label: "Nilai Akhir", num: true },
+    { key: "ktgr", label: "KTGR" },
+    { key: "ket", label: "KET" },
+    { key: "catatan", label: "Catatan" },
+  ];
+
+  // pilih record terbaru (kalau ada beberapa)
+  const record = useMemo(() => {
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const withTime = rows.map((r) => {
+      const t = r.tanggal ?? r.updated_at ?? r.created_at ?? null;
+      return { r, t: t ? new Date(t).getTime() : 0 };
+    });
+    withTime.sort((a, b) => b.t - a.t);
+    return withTime[0].r || rows[0];
+  }, [rows]);
+
+  if (!record) {
+    return <div style={{ color: "var(--muted)" }}>Belum ada data.</div>;
+  }
+
+  // helper render pair label → value
+  const Pair = ({ label, value, isNum }) => {
+    const show =
+      value != null &&
+      String(value).trim() !== "" &&
+      String(value).trim() !== "-";
+    return (
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "200px 1fr",
+          gap: 10,
+          padding: "6px 0",
+          borderBottom: "1px dashed var(--border)",
+        }}
+      >
+        <div className="muted" style={{ whiteSpace: "nowrap" }}>
+          {label}
+        </div>
+        <div
+          style={{
+            whiteSpace: "nowrap",
+            textAlign: isNum ? "right" : "left",
+            fontVariantNumeric: isNum ? "tabular-nums" : "normal",
+          }}
+        >
+          {show ? String(value) : "-"}
+        </div>
+      </div>
+    );
+  };
+
+  const Section = ({ title, cols }) => {
+    // ambil hanya key yang ada nilainya
+    const filled = cols.filter((c) => {
+      const v = record[c.key];
+      return v != null && String(v).trim() !== "";
+    });
+
+    if (filled.length === 0) return null;
+
+    return (
+      <div
+        className="card"
+        style={{
+          border: "1px solid var(--border)",
+          background: "var(--panel)",
+          color: "var(--text)",
+          borderRadius: 12,
+          padding: 12,
+        }}
+      >
+        <div style={{ fontWeight: 800, marginBottom: 6 }}>{title}</div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(1, minmax(0,1fr))",
+            gap: 4,
+          }}
+        >
+          {cols.map((c) => (
+            <Pair
+              key={c.key}
+              label={c.label}
+              value={record[c.key]}
+              isNum={!!c.num}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div
-      className="card"
       style={{
-        marginBottom: 8,
-        whiteSpace: "pre-line",
-        border: "1px solid var(--border)",
-        background: "var(--panel)",
-        color: "var(--text)",
-        borderRadius: 10,
-        padding: "10px 12px",
+        display: "grid",
+        gap: 12,
+        gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
       }}
     >
-      {message}
-      {percent != null && (
-        <div style={{ marginTop: 6 }}>
-          Progres: {percent}%
-          <div
-            style={{
-              height: 6,
-              background: "var(--border)",
-              borderRadius: 4,
-              marginTop: 4,
-            }}
-          >
-            <div
-              style={{
-                width: `${Math.max(0, Math.min(100, percent))}%`,
-                height: 6,
-                background: "var(--accent, #60a5fa)",
-                borderRadius: 4,
-                transition: "width .2s linear",
-              }}
-            />
-          </div>
-        </div>
-      )}
+      <Section title="ANTHRO" cols={ANTHRO} />
+      <Section title="KESAMAPTAAN & RENANG" cols={SAMAPTA_RENANG} />
+      <Section title="REKAP" cols={REKAP} />
     </div>
   );
 }
 
-/* ---------- DocTable (BK, Pelanggaran, Prestasi, Riwayat Kesehatan) ---------- */
+/* ============== DocTable (BK/PLG/PRST/Rikes) ============== */
 
 function DocTable({ rows, onDelete }) {
   if (!rows?.length)
@@ -988,7 +1070,7 @@ function DocTable({ rows, onDelete }) {
   );
 }
 
-/* ---------- Biodata grouping ---------- */
+/* ===================== Biodata grouping =================== */
 
 const GROUPS = [
   {
@@ -1086,7 +1168,7 @@ const GROUPS = [
   },
 ];
 
-/* ---------- SectionCard editable (foto di kanan utk “Foto & Identitas”) ---------- */
+/* ================= SectionCard editable =================== */
 
 function isReadOnlyKey(key) {
   return (
@@ -1255,7 +1337,6 @@ function SectionCard({
         position: "relative",
       }}
     >
-      {/* Header */}
       <div
         style={{
           display: "flex",
@@ -1301,7 +1382,6 @@ function SectionCard({
         )}
       </div>
 
-      {/* Body */}
       {isFotoIdentitas ? (
         <div
           style={{
@@ -1316,7 +1396,6 @@ function SectionCard({
             pointerEvents: isBusy ? "none" : "auto",
           }}
         >
-          {/* Kiri */}
           <div
             style={{
               display: "grid",
@@ -1423,7 +1502,6 @@ function SectionCard({
               })}
           </div>
 
-          {/* Kanan: foto */}
           <div>
             <Field label="Foto">
               <FotoCell />
@@ -1431,7 +1509,6 @@ function SectionCard({
           </div>
         </div>
       ) : (
-        // Default layout
         <div
           className="grid"
           style={{
@@ -1540,7 +1617,7 @@ function SectionCard({
   );
 }
 
-/* ---------- Halaman utama ---------- */
+/* ===================== Halaman utama ====================== */
 
 export default function SiswaDetail({ nik }) {
   const safeNik = useMemo(() => String(nik ?? "").trim(), [nik]);
@@ -1551,10 +1628,8 @@ export default function SiswaDetail({ nik }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [deletingId, setDeletingId] = useState(null);
+  const [busyCard, setBusyCard] = useState({});
 
-  const [busyCard, setBusyCard] = useState({}); // {title: true/false}
-
-  // notifikasi download/export global
   const [dlMsg, setDlMsg] = useState("");
   const [dlPct, setDlPct] = useState(null);
 
@@ -1582,7 +1657,6 @@ export default function SiswaDetail({ nik }) {
     return () => off && off();
   }, []);
 
-  // load biodata
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -1638,7 +1712,6 @@ export default function SiswaDetail({ nik }) {
     loadTab(k);
   }
 
-  // --- API helpers untuk UPDATE biodata & upload foto
   async function updateBiodata(partialPayload, cardTitle) {
     if (!biodata?.nik) throw new Error("NIK tidak tersedia");
     const token = await window.authAPI?.getToken?.();
@@ -1694,7 +1767,6 @@ export default function SiswaDetail({ nik }) {
     return newUrl;
   }
 
-  // hapus BK
   async function handleDeleteBK(item) {
     if (!item?.id) return;
     const ok = window.confirm(`Hapus BK: "${item.judul}"?`);
@@ -1723,8 +1795,6 @@ export default function SiswaDetail({ nik }) {
       setDeletingId(null);
     }
   }
-
-  // hapus Pelanggaran
   async function handleDeletePelanggaran(item) {
     if (!item?.id) return;
     const ok = window.confirm(`Hapus Pelanggaran: "${item.judul}"?`);
@@ -1753,8 +1823,6 @@ export default function SiswaDetail({ nik }) {
       setDeletingId(null);
     }
   }
-
-  // hapus Prestasi
   async function handleDeletePrestasi(item) {
     if (!item?.id) return;
     const ok = window.confirm(`Hapus Prestasi: "${item.judul}"?`);
@@ -1783,8 +1851,6 @@ export default function SiswaDetail({ nik }) {
       setDeletingId(null);
     }
   }
-
-  // hapus Riwayat Kesehatan
   async function handleDeleteRikes(item) {
     if (!item?.id) return;
     const ok = window.confirm(`Hapus Riwayat Kesehatan: "${item.judul}"?`);
@@ -1858,6 +1924,10 @@ export default function SiswaDetail({ nik }) {
 
     if (active === "jasmani") {
       return <JasmaniTable rows={dataMap["jasmani"] || []} rank={mentalRank} />;
+    }
+
+    if (active === "jasmani_polda") {
+      return <JasmaniPoldaCards rows={dataMap["jasmani_polda"] || []} />;
     }
 
     if (active === "bk") {
@@ -1997,7 +2067,6 @@ export default function SiswaDetail({ nik }) {
           color: "var(--text)",
         }}
       >
-        {/* Banner progres download/export: tampil di semua tab */}
         <DownloadNotice message={dlMsg} percent={dlPct} />
 
         <div className="tabs">
@@ -2015,4 +2084,64 @@ export default function SiswaDetail({ nik }) {
       </div>
     </div>
   );
+}
+
+/* ===================== Helper render value ===================== */
+
+function renderValue(key, val) {
+  if (!val && val !== 0) return "-";
+
+  if (key === "foto") {
+    const raw = String(val);
+    const isAbs =
+      /^https?:\/\//i.test(raw) ||
+      raw.startsWith("data:") ||
+      raw.startsWith("blob:");
+    const src = isAbs ? raw : buildViewUrl(raw);
+    return (
+      <img
+        src={src}
+        alt="Foto siswa"
+        style={{
+          width: 180,
+          height: 220,
+          objectFit: "cover",
+          borderRadius: 8,
+          border: "1px solid var(--border)",
+        }}
+        onError={(e) => {
+          e.currentTarget.src =
+            "data:image/svg+xml;utf8," +
+            encodeURIComponent(
+              `<svg xmlns='http://www.w3.org/2000/svg' width='180' height='220'><rect width='100%' height='100%' fill='#0b1220'/><text x='50%' y='50%' fill='#64748b' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-size='12'>No Photo</text></svg>`
+            );
+        }}
+      />
+    );
+  }
+
+  if (key === "file_ktp") {
+    const href = String(val);
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        style={{ color: "var(--link, #60a5fa)" }}
+      >
+        Lihat KTP
+      </a>
+    );
+  }
+
+  if ((key === "created_at" || key === "updated_at") && val) {
+    try {
+      const d = new Date(val);
+      return d.toLocaleString("id-ID");
+    } catch {
+      return String(val);
+    }
+  }
+
+  return String(val);
 }
