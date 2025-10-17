@@ -6,6 +6,7 @@ const rateLimit = require("express-rate-limit");
 const path = require("path");
 const pool = require("./db/pool");
 
+// Routes
 const importRoutes = require("./routes/import.routes");
 const authRoutes = require("./routes/auth.routes");
 const statsRoutes = require("./routes/stats.routes");
@@ -30,32 +31,31 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR
   ? path.resolve(process.env.UPLOAD_DIR)
   : path.join(PROJECT_ROOT, "uploads");
 
-// buka static /uploads menunjuk ke folder yang sama dengan controller
+// Folder statis
 app.use("/uploads", express.static(UPLOAD_DIR));
-/**
- * HELMET GLOBAL:
- * - CORP: cross-origin → izinkan <img> dari origin lain (5173 ↔ 4000)
- * - COEP: off → hindari ERR_BLOCKED_BY_RESPONSE.NotSameOrigin
- */
+
+// Security middleware
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
     crossOriginEmbedderPolicy: false,
-    // (opsional) kalau butuh popup login SSO: crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
   })
 );
 
-// JAGA-JAGA: pastikan tidak ada header COEP/COOP yang tersisa
 app.use((req, res, next) => {
   res.removeHeader("Cross-Origin-Embedder-Policy");
-  // res.removeHeader("Cross-Origin-Opener-Policy"); // biasanya tidak perlu dicabut
   next();
 });
 
+// Body parser
 app.use(express.json());
 
+// ===== CORS configuration =====
 const corsOpts = {
-  origin: "http://localhost:5173",
+  origin: [
+    "http://localhost:5173", // untuk dev lokal frontend
+    "http://192.168.1.3:5173", // untuk akses dari LAN
+  ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
   allowedHeaders: ["Authorization", "Content-Type", "Accept"],
@@ -64,21 +64,16 @@ const corsOpts = {
 app.use(cors(corsOpts));
 app.options("*", cors(corsOpts));
 
-// app.use(rateLimit({ windowMs: 60 * 1000, max: 60 }));
+// Rate limit dasar
+app.use(rateLimit({ windowMs: 60 * 1000, max: 120 }));
 
-/** (opsional) fallback static, berguna buat debug */
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
-
-// ROUTES
+// Routes utama
 app.use("/auth", authRoutes);
 app.use("/import", importRoutes);
 app.use("/stats", statsRoutes);
 app.use("/siswa", siswaRoutes);
 app.use("/ref", refRoutes);
-
-// /download mendukung ?inline=1
 app.use("/download", downloadRoutes);
-
 app.use("/upload", require("./routes/upload.routes"));
 app.use("/prestasi", prestasiRoutes);
 app.use("/riwayat_kesehatan", riwayatRoutes);
@@ -91,8 +86,9 @@ app.use("/jasmani", jasmaniRoutes);
 app.use("/jasmani-polda", jasmaniPoldaRoutes);
 app.use("/api", require("./routes/backup.routes"));
 
-// Health checks
+// ===== Health checks =====
 app.get("/health", (_req, res) => res.json({ ok: true }));
+
 app.get("/health/db", async (_req, res) => {
   try {
     const r = await pool.query("SELECT now() AS now");

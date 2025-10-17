@@ -40,7 +40,6 @@ async function getAllDataByNik(nik) {
   // - prestasi         : TIDAK ada file_path
   // - riwayat_kesehatan: TIDAK ada file_path
   const [
-    sosiometriRes,
     mentalRes,
     bkRes,
     pelRes,
@@ -49,10 +48,6 @@ async function getAllDataByNik(nik) {
     jasmaniRes,
     rikesRes,
   ] = await Promise.all([
-    pool.query(
-      `SELECT * FROM sosiometri WHERE siswa_id = $1 ORDER BY created_at ASC`,
-      [siswaId]
-    ),
     pool.query(
       `SELECT * FROM mental WHERE siswa_id = $1 ORDER BY created_at ASC`,
       [siswaId]
@@ -102,7 +97,6 @@ async function getAllDataByNik(nik) {
   return {
     siswa,
     tabs: {
-      sosiometri: sosiometriRes.rows,
       mental: mentalRes.rows,
       bk: bkRes.rows,
       pelanggaran: pelRes.rows,
@@ -231,7 +225,7 @@ function buildHTML({ siswa, tabs }) {
 <style>
   body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; color:#0b1220; }
   h1 { font-size: 22px; margin: 0 0 12px 0; }
-  h2 { font-size: 18px; margin: 24px 0 8px 0; }
+  h2 { font-size: 18px; margin: 0 0 8px 0; }
   .muted { color: #475569; }
   .small { font-size: 12px; }
   .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -241,56 +235,53 @@ function buildHTML({ siswa, tabs }) {
   th, td { border: 1px solid #e2e8f0; padding: 6px 8px; text-align: left; vertical-align: top; }
   th { background: #f1f5f9; }
   .section { page-break-inside: avoid; }
-  .hr { border-top: 2px solid #e2e8f0; margin: 24px 0; }
+  .pagebreak { page-break-before: always; } /* <<< ini kuncinya */
   .footer-note { font-size: 11px; color:#64748b; margin-top: 8px; }
 </style>
 </head>
 <body>
 
+<!-- Halaman 1: Biodata -->
 <div class="section">
   ${biodataHTML(siswa)}
 </div>
 
-<div class="hr"></div>
+<!-- Halaman 2 dst: tiap tab diberi pagebreak -->
 
-<div class="section">
-  ${tableHTML("Sosiometri", tabs.sosiometri)}
-</div>
-
-<div class="section">
+<div class="pagebreak section">
   ${tableHTML("Mental Kepribadian", tabs.mental)}
 </div>
 
-<div class="section">
+<div class="pagebreak section">
   ${tableHTML("BK (Daftar Dokumen)", tabs.bk)}
   <div class="footer-note">Lampiran dokumen PDF/Gambar akan disertakan di bagian paling bawah.</div>
 </div>
 
-<div class="section">
+<div class="pagebreak section">
   ${tableHTML("Pelanggaran (Daftar Dokumen)", tabs.pelanggaran)}
   <div class="footer-note">Lampiran dokumen PDF/Gambar akan disertakan di bagian paling bawah.</div>
 </div>
 
-<div class="section">
+<div class="pagebreak section">
   ${tableHTML("Mapel", tabs.mapel)}
 </div>
 
-<div class="section">
+<div class="pagebreak section">
   ${tableHTML("Prestasi", tabs.prestasi)}
 </div>
 
-<div class="section">
+<div class="pagebreak section">
   ${tableHTML("Jasmani", tabs.jasmani)}
 </div>
 
-<div class="section">
+<div class="pagebreak section">
   ${tableHTML("Riwayat Kesehatan", tabs.riwayat_kesehatan)}
 </div>
 
-<div class="hr"></div>
-<h2>Lampiran</h2>
-<div class="muted small">
-  Semua file lampiran (PDF dan gambar) akan muncul setelah halaman ini.
+<!-- Lampiran juga di halaman baru -->
+<div class="pagebreak section">
+  <h2>Lampiran</h2>
+  <div class="muted small">Semua file lampiran (PDF dan gambar) akan muncul setelah halaman ini.</div>
 </div>
 
 </body>

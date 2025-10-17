@@ -1,11 +1,14 @@
 // src/pages/SiswaDetail.jsx
-import { useEffect, useMemo, useState, Fragment } from "react";
+import { useEffect, useMemo, useState, Fragment, useRef } from "react";
 import {
   fetchSiswaDetailByNik,
   fetchSiswaTabByNik,
   fetchMentalRankByNik,
   fetchJasmaniOverviewByNik, // <— NEW
 } from "../api/siswa";
+
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
@@ -418,7 +421,7 @@ function MentalTable({ rows, rank }) {
   );
 }
 
-/* ===================== JasmaniTable (matrix per Tahap; tolerate NULL tahap) ====================== */
+/* ===================== JasmaniTable ====================== */
 function JasmaniTable({ rows, rank }) {
   const GROUPS = [
     {
@@ -435,7 +438,6 @@ function JasmaniTable({ rows, rank }) {
   const W_TAHAP = 120;
   const W_NUM = 90;
 
-  // ==== Normalisasi dan proses data ====
   const { tahapList, matrix, stats } = useMemo(() => {
     if (!Array.isArray(rows) || rows.length === 0) {
       return {
@@ -539,7 +541,6 @@ function JasmaniTable({ rows, rank }) {
     v == null || v === "" || Number.isNaN(Number(v)) ? "-" : Number(v);
   const tahapLabel = (t) => (t === 0 ? "Terbaru" : t);
 
-  // ==== Render ====
   return (
     <>
       <div
@@ -962,11 +963,8 @@ function MapelTable({ rows, rank }) {
   );
 }
 
-/* ===== NEW: JasmaniPoldaCards (card per kategori) ===== */
-
-/* ===== REPLACE: JasmaniPoldaCards (card simpel per kategori) ===== */
+/* ===== JasmaniPoldaCards (card simpel per kategori) ===== */
 function JasmaniPoldaCards({ rows }) {
-  // daftar kolom seperti RekapJasmaniPolda.jsx
   const ANTHRO = [
     { key: "tb_cm", label: "TB (cm)" },
     { key: "tb_inchi", label: "TB (inchi)", num: true },
@@ -1013,7 +1011,6 @@ function JasmaniPoldaCards({ rows }) {
     { key: "catatan", label: "Catatan" },
   ];
 
-  // pilih record terbaru (kalau ada beberapa)
   const record = useMemo(() => {
     if (!Array.isArray(rows) || rows.length === 0) return null;
     const withTime = rows.map((r) => {
@@ -1028,7 +1025,6 @@ function JasmaniPoldaCards({ rows }) {
     return <div style={{ color: "var(--muted)" }}>Belum ada data.</div>;
   }
 
-  // helper render pair label → value
   const Pair = ({ label, value, isNum }) => {
     const show =
       value != null &&
@@ -1061,7 +1057,6 @@ function JasmaniPoldaCards({ rows }) {
   };
 
   const Section = ({ title, cols }) => {
-    // ambil hanya key yang ada nilainya
     const filled = cols.filter((c) => {
       const v = record[c.key];
       return v != null && String(v).trim() !== "";
@@ -1751,6 +1746,9 @@ export default function SiswaDetail({ nik }) {
   const [dlMsg, setDlMsg] = useState("");
   const [dlPct, setDlPct] = useState(null);
 
+  // === REF: bungkus konten tab untuk ditangkap HTML2Canvas
+  const tabContentRef = useRef(null);
+
   useEffect(() => {
     if (!window.electronAPI?.onDownloadStatus) return;
     const off = window.electronAPI.onDownloadStatus((p) => {
@@ -1819,7 +1817,6 @@ export default function SiswaDetail({ nik }) {
         }
       }
 
-      // === NEW: kalau tab "jasmani", ambil overview+ranking (batalion/kompi/pleton)
       if (tabKey === "jasmani") {
         try {
           const token2 = await window.authAPI?.getToken?.();
@@ -1829,14 +1826,13 @@ export default function SiswaDetail({ nik }) {
                 angkatan: ov?.angkatan ?? null,
                 batalion: ov?.batalion ?? null,
                 kompi: ov?.kompi ?? null,
-                // pleton di UI ditampilkan "Kompi{kompi}{pleton}", kalau backend kirim "A1" ambil angkanya
                 pleton: (() => {
                   const raw = ov?.pleton ?? ov?.pleton_label ?? null;
                   if (raw == null) return null;
                   const num = String(raw).replace(/^\D+/, "");
                   return num ? Number(num) : null;
                 })(),
-                rank: ov.rank, // { global, batalion, kompi, pleton }
+                rank: ov.rank,
               }
             : null;
           setJasmaniRank(jr);
@@ -2141,18 +2137,193 @@ export default function SiswaDetail({ nik }) {
     return <DataTable rows={dataMap[active] || []} />;
   }
 
-  function startExport() {
+  // =============== EXPORT PDF (semua tab → 1 PDF) ===============
+  // Util: delay untuk tunggu render selesai setelah ganti tab
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Potong canvas yang tinggi menjadi beberapa halaman A4 di jsPDF (px → mm via ratio)
+  function addCanvasToPdf(
+    pdf,
+    canvas,
+    title,
+    headerInfo,
+    margins = { top: 16, left: 16, right: 16, bottom: 16 }
+  ) {
+    const pageWidth = pdf.internal.pageSize.getWidth(); // mm
+    const pageHeight = pdf.internal.pageSize.getHeight(); // mm
+
+    const imgWidth = pageWidth - margins.left - margins.right; // mm
+    const imgHeight = (canvas.height * imgWidth) / canvas.width; // mm (scale proporsional)
+
+    // Render title+header setiap halaman
+    const headerHeight = 10; // mm (space judul)
+    const availableHeight =
+      pageHeight - margins.top - margins.bottom - headerHeight;
+
+    // Konversi tinggi canvas (mm)
+    const fullHeight = imgHeight;
+
+    // Buat canvas sementara untuk slice vertikal
+    const pxPerMm = canvas.width / imgWidth;
+    const sliceHeightPx = Math.floor(availableHeight * pxPerMm);
+
+    let rendered = 0;
+    let pageIndex = 0;
+
+    while (rendered < canvas.height) {
+      const slice = document.createElement("canvas");
+      slice.width = canvas.width;
+      slice.height = Math.min(sliceHeightPx, canvas.height - rendered);
+
+      const ctx = slice.getContext("2d");
+      ctx.drawImage(
+        canvas,
+        0,
+        rendered,
+        canvas.width,
+        slice.height,
+        0,
+        0,
+        slice.width,
+        slice.height
+      );
+
+      const sliceImgHeightMm = (slice.height * imgWidth) / slice.width;
+
+      if (pageIndex > 0) pdf.addPage();
+
+      // Header
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(12);
+      pdf.text(title, margins.left, margins.top);
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.text(headerInfo, margins.left, margins.top + 6);
+
+      // Gambar isi di bawah header
+      const yStart = margins.top + headerHeight;
+      const imgData = slice.toDataURL("image/png");
+      pdf.addImage(
+        imgData,
+        "PNG",
+        margins.left,
+        yStart,
+        imgWidth,
+        sliceImgHeightMm,
+        "",
+        "FAST"
+      );
+
+      rendered += slice.height;
+      pageIndex += 1;
+    }
+  }
+
+  async function exportAllTabsToPDF() {
     if (!biodata?.nik) {
       alert("NIK tidak tersedia.");
       return;
     }
-    const url = `${API}/export/all?nik=${encodeURIComponent(biodata.nik)}`;
 
+    try {
+      setDlMsg("Menyiapkan export PDF semua tab…");
+      setDlPct(null);
+
+      // Pastikan semua tab sudah punya data (agar saat capture tampil penuh)
+      for (const t of TABS) {
+        await loadTab(t.key);
+      }
+
+      const pdf = new jsPDF("p", "mm", "a4"); // Portrait, millimeter, A4
+      const studentHeader = `${biodata?.nama || "-"} · NOSIS: ${
+        biodata?.nosis || "-"
+      } · NIK: ${biodata?.nik || "-"}`;
+
+      // Simpan tab aktif, nanti balikin
+      const prevActive = active;
+
+      for (let i = 0; i < TABS.length; i++) {
+        const tab = TABS[i];
+        setActive(tab.key);
+        // Tunggu render React (dua frame kecil supaya layout stabil)
+        await wait(50);
+        await wait(200);
+
+        const node = tabContentRef.current;
+        if (!node) continue;
+
+        // Paksa lebar untuk hindari wrap aneh saat capture (opsional)
+        const prevWidth = node.style.width;
+        node.style.width = `${node.clientWidth}px`;
+
+        // Screenshot DOM
+        const canvas = await html2canvas(node, {
+          scale: 2, // kualitas lebih tajam
+          useCORS: true,
+          backgroundColor: "#ffffff", // PDF putih
+          logging: false,
+          windowWidth: document.documentElement.scrollWidth,
+          windowHeight: document.documentElement.scrollHeight,
+        });
+
+        node.style.width = prevWidth || "";
+
+        // Tambah ke PDF (otomatis pecah halaman jika tinggi)
+        addCanvasToPdf(pdf, canvas, tab.label, studentHeader);
+
+        // Progres sederhana
+        setDlMsg(`Memproses tab: ${tab.label} (${i + 1}/${TABS.length})…`);
+        setDlPct(Math.round(((i + 1) / TABS.length) * 100));
+      }
+
+      // Simpan file
+      // ...
+      const ts = new Date();
+      const y = ts.getFullYear();
+      const m = String(ts.getMonth() + 1).padStart(2, "0");
+      const d = String(ts.getDate()).padStart(2, "0");
+      const hh = String(ts.getHours()).padStart(2, "0");
+      const mm = String(ts.getMinutes()).padStart(2, "0");
+      const ss = String(ts.getSeconds()).padStart(2, "0");
+      const fname = `DetailSiswa-${
+        biodata?.nosis || "NOSIS"
+      }-${y}${m}${d}-${hh}${mm}${ss}.pdf`;
+
+      // === FIX: Jangan pakai electronAPI.download untuk blob/dataURL
+      // Cukup gunakan pdf.save() (berjalan di web & Electron)
+      pdf.save(fname);
+
+      setDlMsg(`✅ Export selesai: ${fname}`);
+      setDlPct(100);
+      setTimeout(() => {
+        setDlMsg("");
+        setDlPct(null);
+      }, 6000);
+
+      // Kembalikan tab sebelumnya
+      setActive(prevActive);
+    } catch (e) {
+      console.error("[export-pdf] error:", e);
+      setDlMsg(`❌ Export gagal: ${e?.message || "unknown"}`);
+      setDlPct(null);
+    }
+  }
+
+  function startExport() {
+    if (!biodata?.nik) return alert("NIK tidak tersedia.");
+    const url = `${API}/export/all-by-nik.pdf?nik=${encodeURIComponent(
+      biodata.nik
+    )}`;
+
+    // HEAD sering tidak disupport oleh stream PDF; toleransi 405/501
     fetch(url, { method: "HEAD" })
       .then((r) => {
-        if (!r.ok) throw new Error("Export tidak tersedia");
+        if (!r.ok && r.status !== 405 && r.status !== 501) {
+          throw new Error("Export tidak tersedia");
+        }
         if (window.electronAPI?.download) {
-          window.electronAPI.download(url);
+          window.electronAPI.download(url); // <- HTTP langsung, bukan blob:
         } else {
           const a = document.createElement("a");
           a.href = url;
@@ -2227,7 +2398,10 @@ export default function SiswaDetail({ nik }) {
           ))}
         </div>
 
-        <div style={{ marginTop: 12 }}>{renderActiveTab()}</div>
+        {/* === Bungkus konten tab dengan ref untuk capture PDF === */}
+        <div style={{ marginTop: 12 }} ref={tabContentRef}>
+          {renderActiveTab()}
+        </div>
       </div>
     </div>
   );
