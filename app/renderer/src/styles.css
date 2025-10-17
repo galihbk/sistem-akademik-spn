@@ -280,3 +280,32 @@ a {
 *::-webkit-scrollbar-corner {
   background: #0f1424;
 }
+
+/* ====== FIX: SCROLL HORIZONTAL KHUSUS TABLE ====== */
+html,
+body {
+  overflow-x: hidden; /* ⛔ Kunci scroll horizontal global */
+}
+
+.table-scroll-wrapper {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto !important;
+  overflow-y: auto !important;
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+}
+
+.table-scroll-wrapper::-webkit-scrollbar {
+  height: 8px;
+}
+.table-scroll-wrapper::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 8px;
+}
+.table-scroll-wrapper::-webkit-scrollbar-thumb:hover {
+  background: var(--brand);
+}

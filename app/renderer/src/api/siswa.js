@@ -49,7 +49,22 @@ export async function fetchSiswaTabByNik(nik, tab, token = "") {
   if (!res.ok) throw new Error(`Gagal ambil ${key} (${res.status})`);
   return res.json();
 }
-
+export async function fetchJasmaniOverviewByNik(nik, token) {
+  const res = await fetch(
+    `${API}/siswa/nik/${encodeURIComponent(nik)}/jasmani_overview`,
+    {
+      headers: {
+        Accept: "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    }
+  );
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "");
+    throw new Error(msg || "Gagal mengambil overview jasmani");
+  }
+  return res.json();
+}
 export async function fetchMentalRankByNik(nik, token = "") {
   const val = String(nik ?? "").trim();
   if (!val) throw new Error("NIK kosong");

@@ -1,11 +1,10 @@
-// controllers/siswa.controller.js
+// src/controllers/siswa.controller.js
 const path = require("path");
 const fs = require("fs/promises");
 const pool = require("../db/pool");
 
 // =====================================================
-// JASMANI (biasa) ambil dari VIEW yang cocok dgn UI:
-//   v_jasmani_itemized  (kolom: item, nilai, keterangan, created_at, ...)
+// Konstanta VIEW
 // =====================================================
 const TABLE_JASMANI_LABEL = "v_jasmani_itemized";
 const TABLE_JASMANI_IDENT = "v_jasmani_itemized";
@@ -49,27 +48,22 @@ async function getSiswaIdByNik(nik) {
 }
 
 /**
- * Ambil baris by NIK dengan prioritas:
+ * Ambil baris by NIK dengan prioritas (util lama untuk tabel2 lain):
  *   1) "siswa_id" = id siswa (exact)
  *   2) "nik" = nik (case/trim-insensitive)
  *   3) "siswa_nik" = nik (case/trim-insensitive)
  *   4) "nosis" = nosis siswa (case/trim-insensitive)
- *
- * ORDER BY pakai kolom yang tersedia: created_at/updated_at/tanggal/tgl/id.
  */
 async function smartRowsByNik(nik, opt) {
   const { schema = "public", tableLabel, tableIdent } = opt;
 
-  // 0) pastikan objek ada
   const exists = await schemaHasTable(schema, tableLabel);
   if (!exists) return [];
 
-  // 1) list kolom
   const { lowerMap } = await getTableColumns(schema, tableLabel);
   const has = (name) => lowerMap.has(String(name).toLowerCase());
   const col = (name) => `"${lowerMap.get(String(name).toLowerCase())}"`;
 
-  // 2) ORDER BY
   const orderCandidate = [
     "created_at",
     "updated_at",
@@ -85,7 +79,6 @@ async function smartRowsByNik(nik, opt) {
       }`
     : "";
 
-  // 3) ambil siswa_id & nosis dari master
   const siswaId = await getSiswaIdByNik(nik);
   let nosisByNik = null;
   if (siswaId) {
@@ -96,7 +89,6 @@ async function smartRowsByNik(nik, opt) {
     nosisByNik = rs.rowCount ? rs.rows[0].nosis : null;
   }
 
-  // helper WHERE exact (untuk integer id) & insensitive (text)
   async function tryWhereExact(colName, value) {
     if (!has(colName) || value == null) return null;
     const sql = `SELECT * FROM ${tableIdent} WHERE ${col(
@@ -115,7 +107,6 @@ async function smartRowsByNik(nik, opt) {
     return r.rowCount ? r.rows : null;
   }
 
-  // 4) prioritas filter
   if (siswaId) {
     const r1 = await tryWhereExact("siswa_id", siswaId);
     if (r1) return r1;
@@ -272,48 +263,314 @@ async function listPrestasi(req, res) {
   return sendRowsOrEmptyByNik_legacy(res, "prestasi", req.params.nik);
 }
 
-/** GET /siswa/nik/:nik/jasmani  → dari VIEW v_jasmani_itemized */
+/** GET /siswa/nik/:nik/jasmani
+ *  Sumber utama: VIEW v_jasmani_itemized
+ *  Perbaikan:
+ *   - bila field tahap di view masih NULL (data lama), kita isi otomatis
+ *     berdasarkan urutan waktu (created_at/updated_at) per jasmani_spn_id.
+ *   - tetap ada fallback ke tabel jasmani_spn (pecah item) jika VIEW tidak ada/errored.
+ */
 async function listJasmani(req, res) {
   try {
     const nik = (req.params.nik || "").trim();
     if (!nik) return res.json([]);
 
-    // 1) Cari siswa_id dari master siswa
+    // ambil siswa_id
     const r = await pool.query(`SELECT id FROM siswa WHERE nik = $1 LIMIT 1`, [
       nik,
     ]);
-    if (!r.rowCount) return res.json([]); // siswa tidak ada
+    if (!r.rowCount) return res.json([]);
     const siswaId = r.rows[0].id;
 
-    // 2) Gunakan view v_jasmani_itemized jika ada; kalau tidak, fallback ke jasmani_spn
-    const chkView = await pool.query(
+    // cek view
+    const chk = await pool.query(
       `SELECT to_regclass('public.v_jasmani_itemized') AS tname`
     );
-    const hasView = !!chkView.rows[0].tname;
+    const hasView = !!chk.rows?.[0]?.tname;
 
     if (hasView) {
-      const sql = `
-        SELECT *
-        FROM v_jasmani_itemized
-        WHERE siswa_id = $1
-        ORDER BY COALESCE(updated_at, created_at) NULLS LAST, jasmani_spn_id
-      `;
-      const { rows } = await pool.query(sql, [siswaId]);
-      return res.json(rows);
-    } else {
-      // fallback: tabel jasmani_spn langsung
-      const sql = `
-        SELECT *
-        FROM jasmani_spn
-        WHERE siswa_id = $1
-        ORDER BY COALESCE(updated_at, created_at) NULLS LAST, id
-      `;
-      const { rows } = await pool.query(sql, [siswaId]);
-      return res.json(rows);
+      try {
+        // ambil itemized
+        const { rows } = await pool.query(
+          `
+          SELECT
+            jasmani_spn_id,
+            siswa_id,
+            nosis,
+            nama,
+            kompi,
+            pleton,
+            tahap,
+            item,
+            nilai,
+            kategori,
+            keterangan,
+            sumber_file,
+            created_at,
+            updated_at
+          FROM v_jasmani_itemized
+          WHERE siswa_id = $1
+          ORDER BY COALESCE(updated_at, created_at) NULLS LAST, jasmani_spn_id, item
+          `,
+          [siswaId]
+        );
+
+        if (!rows.length) return res.json([]);
+
+        // ====== NORMALISASI TAHAP (AUTO FILL BILA NULL) ======
+        // 1) kumpulkan waktu per jasmani_spn_id (pakai timestamp terbaru dari cluster tsb)
+        const spnTime = new Map(); // jasmani_spn_id -> millis
+        for (const r of rows) {
+          const t = r.updated_at || r.created_at || null; // Date dari PG driver -> js Date
+          const ms = t ? new Date(t).getTime() : 0;
+          const prev = spnTime.get(r.jasmani_spn_id) ?? -1;
+          // pakai waktu terbesar (terbaru) sebagai representasi record itu
+          if (ms > prev) spnTime.set(r.jasmani_spn_id, ms);
+        }
+
+        // 2) urutkan unique jasmani_spn_id berdasar waktu (lama -> baru) agar tahap 1,2,3...
+        const orderedSpn = Array.from(spnTime.entries())
+          .sort((a, b) => a[1] - b[1])
+          .map(([id]) => id);
+
+        // 3) buat nomor tahap otomatis per urutan di atas (mulai 1)
+        const autoTahap = new Map(); // jasmani_spn_id -> tahapAuto
+        orderedSpn.forEach((id, idx) => autoTahap.set(id, idx + 1));
+
+        // 4) sematkan tahap: jika null/undefined/0, pakai auto
+        const out = rows.map((x) => {
+          let tahap = x.tahap;
+          if (
+            tahap == null || // null/undefined
+            (typeof tahap === "number" && !Number.isFinite(tahap)) ||
+            (typeof tahap === "string" && tahap.trim() === "")
+          ) {
+            tahap = autoTahap.get(x.jasmani_spn_id) || null;
+          }
+          return {
+            ...x,
+            tahap,
+          };
+        });
+
+        return res.json(out);
+      } catch (err) {
+        console.error("[listJasmani:view-error]", err?.message || err);
+        // jatuh ke fallback di bawah
+      }
     }
+
+    // ====== FALLBACK (view tidak ada / error): ambil latest jasmani_spn, pecah jadi item ======
+    const q2 = await pool.query(
+      `
+      SELECT *
+      FROM jasmani_spn
+      WHERE siswa_id = $1
+      ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+      LIMIT 1
+      `,
+      [siswaId]
+    );
+    if (!q2.rowCount) return res.json([]);
+
+    const j = q2.rows[0];
+    const time = j.updated_at || j.created_at || null;
+    const items = [
+      {
+        item: "Lari 12 Menit (TS)",
+        nilai: j.lari_12_menit_ts,
+        keterangan: j.keterangan,
+      },
+      {
+        item: "Lari 12 Menit (RS)",
+        nilai: j.lari_12_menit_rs,
+        keterangan: j.keterangan,
+      },
+      { item: "Sit Up (TS)", nilai: j.sit_up_ts, keterangan: j.keterangan },
+      { item: "Sit Up (RS)", nilai: j.sit_up_rs, keterangan: j.keterangan },
+      {
+        item: "Shuttle Run (TS)",
+        nilai: j.shuttle_run_ts,
+        keterangan: j.keterangan,
+      },
+      {
+        item: "Shuttle Run (RS)",
+        nilai: j.shuttle_run_rs,
+        keterangan: j.keterangan,
+      },
+      { item: "Push Up (TS)", nilai: j.push_up_ts, keterangan: j.keterangan },
+      { item: "Push Up (RS)", nilai: j.push_up_rs, keterangan: j.keterangan },
+      { item: "Pull Up (TS)", nilai: j.pull_up_ts, keterangan: j.keterangan },
+      { item: "Pull Up (RS)", nilai: j.pull_up_rs, keterangan: j.keterangan },
+      { item: "Nilai Akhir", nilai: j.nilai_akhir, keterangan: j.keterangan },
+    ].map((x) => ({
+      ...x,
+      siswa_id: siswaId,
+      jasmani_spn_id: j.id,
+      tahap: j.tahap ?? 1, // fallback: kalau null, anggap 1
+      created_at: time,
+      updated_at: time,
+    }));
+
+    return res.json(items);
   } catch (e) {
-    console.error("[siswa.listJasmani(strict by siswa_id)]", e);
+    console.error("[listJasmaniByNik]", e);
     return res.json([]);
+  }
+}
+
+/** GET /siswa/nik/:nik/jasmani_overview */
+// ================= JASMANI OVERVIEW (REPLACE THIS FUNCTION) =================
+async function jasmaniOverviewByNik(req, res) {
+  const client = req.app.get("db") || pool;
+  const { nik } = req.params;
+
+  try {
+    // Ambil siswa-nya dulu
+    const qSiswa = `
+      SELECT
+        s.id AS siswa_id,
+        s.nik,
+        s.nama,
+        s.batalion,
+        COALESCE(s.kelompok_angkatan, '')::text AS angkatan,
+        COALESCE(s.ton, '')::text AS ton
+      FROM siswa s
+      WHERE s.nik = $1
+      LIMIT 1
+    `;
+    const rSiswa = await client.query(qSiswa, [nik]);
+    if (rSiswa.rowCount === 0) {
+      return res.status(404).json({ message: "Siswa tidak ditemukan" });
+    }
+    const siswa = rSiswa.rows[0];
+
+    // Ranking berdasarkan nilai_akhir terbaru per siswa dalam angkatan sama
+    const qRank = `
+      WITH me AS (
+        SELECT
+          s.id AS siswa_id,
+          s.nik,
+          s.batalion,
+          COALESCE(s.kelompok_angkatan, '')::text AS angkatan,
+          COALESCE(s.ton, '')::text AS ton
+        FROM siswa s
+        WHERE s.nik = $1
+        LIMIT 1
+      ),
+      same_angkatan AS (
+        SELECT
+          s.id AS siswa_id,
+          s.nik,
+          s.batalion,
+          COALESCE(s.kelompok_angkatan, '')::text AS angkatan,
+          COALESCE(s.ton, '')::text AS ton
+        FROM siswa s
+        JOIN me ON COALESCE(s.kelompok_angkatan,'') = me.angkatan
+      ),
+      latest_js_raw AS (
+        SELECT DISTINCT ON (j.siswa_id)
+          j.siswa_id,
+          /* Buang karakter non-angka dan jadikan NULL jika string kosong */
+          NULLIF(
+            regexp_replace(
+              COALESCE(j.nilai_akhir::text, ''),
+              '[^0-9,\\.\\-]',
+              '',
+              'g'
+            ),
+            ''
+          ) AS cleaned,
+          COALESCE(j.updated_at, j.created_at) AS ts
+        FROM jasmani_spn j
+        JOIN same_angkatan sa ON sa.siswa_id = j.siswa_id
+        ORDER BY j.siswa_id, COALESCE(j.updated_at, j.created_at) DESC, j.id DESC
+      ),
+      latest_js AS (
+        SELECT
+          siswa_id,
+          CASE
+            /* hanya cast kalau formatnya jelas angka (boleh koma/titik desimal) */
+            WHEN cleaned IS NOT NULL
+             AND cleaned ~ '^-?[0-9]+([\\.,][0-9]+)?$'
+              THEN REPLACE(cleaned, ',', '.')::double precision
+            ELSE NULL::double precision
+          END AS score,
+          ts
+        FROM latest_js_raw
+      ),
+      joined AS (
+        SELECT
+          sa.siswa_id,
+          sa.nik,
+          sa.batalion,
+          sa.angkatan,
+          /* kompi = huruf pertama TON (uppercase), aman untuk NULL/empty */
+          UPPER(NULLIF(regexp_replace(sa.ton, '[^A-Za-z].*', ''), '')) AS kompi,
+          /* pleton = label TON utuh (string, tidak di-cast int) */
+          UPPER(COALESCE(sa.ton, '')) AS pleton,
+          lj.score
+        FROM same_angkatan sa
+        LEFT JOIN latest_js lj ON lj.siswa_id = sa.siswa_id
+      ),
+      ranked AS (
+        SELECT
+          *,
+          RANK()  OVER (ORDER BY score DESC NULLS LAST)                                 AS r_global,
+          COUNT(*) FILTER (WHERE score IS NOT NULL) OVER ()                              AS t_global,
+
+          RANK()  OVER (PARTITION BY batalion            ORDER BY score DESC NULLS LAST) AS r_batalion,
+          COUNT(*) FILTER (WHERE score IS NOT NULL) OVER (PARTITION BY batalion)         AS t_batalion,
+
+          RANK()  OVER (PARTITION BY kompi               ORDER BY score DESC NULLS LAST) AS r_kompi,
+          COUNT(*) FILTER (WHERE score IS NOT NULL) OVER (PARTITION BY kompi)            AS t_kompi,
+
+          RANK()  OVER (PARTITION BY kompi, pleton       ORDER BY score DESC NULLS LAST) AS r_pleton,
+          COUNT(*) FILTER (WHERE score IS NOT NULL) OVER (PARTITION BY kompi, pleton)    AS t_pleton
+        FROM joined
+      )
+      SELECT *
+      FROM ranked
+      WHERE nik = (SELECT nik FROM me)
+      LIMIT 1
+    `;
+
+    const rRank = await client.query(qRank, [nik]);
+    const row = rRank.rows[0] || null;
+
+    const kompi =
+      row?.kompi ||
+      (siswa.ton ? String(siswa.ton).slice(0, 1).toUpperCase() : null);
+    const pleton =
+      row?.pleton || (siswa.ton ? String(siswa.ton).toUpperCase() : null);
+
+    const out = {
+      angkatan: siswa.angkatan || null,
+      batalion: siswa.batalion || null,
+      kompi: kompi || null,
+      pleton: pleton || null,
+      rank: row
+        ? {
+            global: { pos: row.r_global ?? null, total: row.t_global ?? null },
+            batalion: {
+              pos: row.r_batalion ?? null,
+              total: row.t_batalion ?? null,
+            },
+            kompi: { pos: row.r_kompi ?? null, total: row.t_kompi ?? null },
+            pleton: { pos: row.r_pleton ?? null, total: row.t_pleton ?? null },
+          }
+        : {
+            global: { pos: null, total: null },
+            batalion: { pos: null, total: null },
+            kompi: { pos: null, total: null },
+            pleton: { pos: null, total: null },
+          },
+    };
+
+    return res.json(out);
+  } catch (err) {
+    console.error("[siswa.jasmani_overview] error:", err);
+    return res.status(500).json({ message: "Internal error" });
   }
 }
 
@@ -326,7 +583,9 @@ async function listJasmaniPolda(req, res) {
   return sendRowsOrEmptyByNik_legacy(res, "jasmani_polda", req.params.nik);
 }
 
-// ============== RANKING (tetap) ==============
+// ============== RANKING (by NIK & by Pleton) ==============
+
+/** Tetap: GET /ranking/mental/nik/:nik  */
 async function rankMentalByNik(req, res) {
   console.log("test");
   const nikParam = (req.params.nik || "").trim();
@@ -365,8 +624,8 @@ async function rankMentalByNik(req, res) {
           s.kelompok_angkatan,
           UPPER(NULLIF(regexp_replace(s.ton, '[^A-Za-z].*', ''), '')) AS kompi,
           CASE
-            WHEN regexp_replace(s.ton, '\\D+', '', 'g') <> ''
-              THEN (regexp_replace(s.ton, '\\D+', '', 'g'))::int
+            WHEN regexp_replace(COALESCE(s.ton, ''), '[^0-9]+', '', 'g') <> ''
+              THEN (regexp_replace(s.ton, '[^0-9]+', '', 'g'))::int
             ELSE NULL
           END AS pleton
         FROM siswa s
@@ -455,6 +714,74 @@ async function rankMentalByNik(req, res) {
     });
   } catch (e) {
     console.error("[rankMentalByNik] error:", e);
+    return res.status(500).json({ error: "Internal error" });
+  }
+}
+
+/** GET /ranking/mental/pleton?angkatan=2025&kompi=A&pleton=1 */
+async function rankMentalByPleton(req, res) {
+  try {
+    const angkatan = (req.query.angkatan || "").trim();
+    const kompi = (req.query.kompi || "").trim().toUpperCase();
+    const pleton = parseInt(req.query.pleton, 10);
+
+    if (!angkatan || !kompi || !Number.isFinite(pleton)) {
+      return res.status(400).json({ error: "angkatan, kompi, pleton wajib" });
+    }
+
+    const sql = `
+      WITH base AS (
+        SELECT
+          s.id AS siswa_id,
+          s.nik, s.nosis, s.nama,
+          s.batalion, s.ton, s.kelompok_angkatan,
+          UPPER(NULLIF(regexp_replace(s.ton, '[^A-Za-z].*', ''), '')) AS kompi,
+          CASE
+            WHEN regexp_replace(COALESCE(s.ton,''), '[^0-9]+', '', 'g') <> ''
+              THEN (regexp_replace(s.ton, '[^0-9]+', '', 'g'))::int
+            ELSE NULL
+          END AS pleton
+        FROM siswa s
+        WHERE s.kelompok_angkatan = $1
+      ),
+      mental_num AS (
+        SELECT
+          m.siswa_id,
+          CASE
+            WHEN regexp_replace(COALESCE(m.nilai,''), ',', '.', 'g') ~ '^[0-9]+(\\.[0-9]+)?$'
+              THEN regexp_replace(m.nilai, ',', '.', 'g')::numeric
+            ELSE NULL::numeric
+          END AS nilai_num
+        FROM mental m
+        JOIN base b ON b.siswa_id = m.siswa_id
+      ),
+      avg_mental AS (
+        SELECT
+          b.*,
+          AVG(n.nilai_num) AS avg_nilai
+        FROM base b
+        LEFT JOIN mental_num n ON n.siswa_id = b.siswa_id
+        GROUP BY b.siswa_id, b.nik, b.nosis, b.nama, b.batalion, b.ton, b.kelompok_angkatan, b.kompi, b.pleton
+      )
+      SELECT
+        nik, nosis, nama, batalion, ton, kelompok_angkatan,
+        kompi, pleton, avg_nilai,
+        RANK() OVER (PARTITION BY kompi, pleton ORDER BY avg_nilai DESC NULLS LAST) AS rank_pleton
+      FROM avg_mental
+      WHERE kompi = $2 AND pleton = $3
+      ORDER BY avg_nilai DESC NULLS LAST, nama ASC;
+    `;
+
+    const { rows } = await pool.query(sql, [angkatan, kompi, pleton]);
+    return res.json({
+      angkatan,
+      kompi,
+      pleton,
+      total: rows.filter((r) => r.avg_nilai != null).length,
+      items: rows,
+    });
+  } catch (e) {
+    console.error("[rankMentalByPleton] error:", e);
     return res.status(500).json({ error: "Internal error" });
   }
 }
@@ -682,7 +1009,7 @@ module.exports = {
   listPelanggaran,
   listMapel,
   listPrestasi,
-  listJasmani, // ← dari v_jasmani_itemized
+  listJasmani,
   listRiwayatKesehatan,
   listJasmaniPolda,
 
@@ -693,4 +1020,6 @@ module.exports = {
 
   // rank
   rankMentalByNik,
+  rankMentalByPleton,
+  jasmaniOverviewByNik,
 };

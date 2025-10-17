@@ -1,9 +1,10 @@
 // src/pages/SiswaDetail.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Fragment } from "react";
 import {
   fetchSiswaDetailByNik,
   fetchSiswaTabByNik,
   fetchMentalRankByNik,
+  fetchJasmaniOverviewByNik, // <— NEW
 } from "../api/siswa";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -417,69 +418,128 @@ function MentalTable({ rows, rank }) {
   );
 }
 
-/* ===================== JasmaniTable ====================== */
-
+/* ===================== JasmaniTable (matrix per Tahap; tolerate NULL tahap) ====================== */
 function JasmaniTable({ rows, rank }) {
-  const norm = useMemo(() => {
-    if (!Array.isArray(rows)) return [];
-    return rows
+  const GROUPS = [
+    {
+      key: "lari_12_menit",
+      label: "Lari 12 Menit",
+      match: /lari.*12|lari\s*12/i,
+    },
+    { key: "sit_up", label: "Sit Up", match: /sit\s*up/i },
+    { key: "shuttle_run", label: "Shuttle Run", match: /shuttle\s*run/i },
+    { key: "push_up", label: "Push Up", match: /push\s*up/i },
+    { key: "pull_up", label: "Pull Up", match: /pull\s*up/i },
+  ];
+
+  const W_TAHAP = 120;
+  const W_NUM = 90;
+
+  // ==== Normalisasi dan proses data ====
+  const { tahapList, matrix, stats } = useMemo(() => {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return {
+        tahapList: [],
+        matrix: new Map(),
+        stats: { count: 0, avg: null, min: null, max: null },
+      };
+    }
+
+    const norm = rows
       .map((r) => {
-        const jenis =
-          r.jenis_test ??
-          r.jenis ??
-          r.test ??
-          r.nama_test ??
-          r.kategori ??
-          r.item ??
-          "-";
+        const item = String(r.item || "").trim();
+        const kategori = String(r.kategori || "").trim();
+        const tahap = Number(r.tahap) || 0;
+        const nilai = r.nilai !== null ? parseFloat(r.nilai) : null;
+        const time = new Date(
+          r.updated_at || r.created_at || Date.now()
+        ).getTime();
 
-        const nilaiRaw =
-          r.nilai ?? r.skor ?? r.value ?? r.score ?? r.penilaian ?? null;
-        const nilai = nilaiRaw == null ? null : String(nilaiRaw);
-        const nilaiNum = toNumberOrNull(nilai);
+        let groupKey = null;
+        for (const g of GROUPS) {
+          if (g.match.test(item)) {
+            groupKey = g.key;
+            break;
+          }
+        }
 
-        const catatan = r.catatan ?? r.note ?? r.keterangan ?? null;
+        const sub = /^(ts|rs)$/i.test(kategori)
+          ? kategori.toLowerCase()
+          : item.toLowerCase().includes("(ts)")
+          ? "ts"
+          : item.toLowerCase().includes("(rs)")
+          ? "rs"
+          : null;
 
-        const ts =
-          r.updated_at ??
-          r.updatedAt ??
-          r.created_at ??
-          r.createdAt ??
-          r.tanggal ??
-          null;
-
-        const time = ts ? new Date(ts) : null;
-
-        return {
-          jenis: String(jenis),
-          nilai,
-          nilaiNum,
-          catatan: catatan == null ? null : String(catatan),
-          time,
-        };
+        return { tahap, groupKey, sub, nilai, time };
       })
-      .sort((a, b) => {
-        const n = a.jenis.localeCompare(b.jenis, "id");
-        if (n !== 0) return n;
-        if (a.time && b.time) return b.time - a.time;
-        return 0;
-      });
+      .filter((x) => x.groupKey && x.sub);
+
+    const nums = norm.map((x) => x.nilai).filter((n) => n != null && !isNaN(n));
+    const stats =
+      nums.length === 0
+        ? { count: 0, avg: null, min: null, max: null }
+        : {
+            count: nums.length,
+            avg: nums.reduce((a, b) => a + b, 0) / nums.length,
+            min: Math.min(...nums),
+            max: Math.max(...nums),
+          };
+
+    const tahapList = [...new Set(norm.map((x) => x.tahap))].sort(
+      (a, b) => a - b
+    );
+
+    const matrix = new Map();
+    for (const row of norm) {
+      const k = `${row.tahap}||${row.groupKey}||${row.sub}`;
+      const prev = matrix.get(k);
+      if (!prev || row.time > prev.time) matrix.set(k, row);
+    }
+
+    return { tahapList, matrix, stats };
   }, [rows]);
 
-  const summary = useMemo(() => {
-    const nums = norm.map((r) => r.nilaiNum).filter((n) => n != null);
-    if (!nums.length) {
-      return { count: 0, avg: null, min: null, max: null };
-    }
-    const sum = nums.reduce((a, b) => a + b, 0);
-    return {
-      count: nums.length,
-      avg: sum / nums.length,
-      min: Math.min(...nums),
-      max: Math.max(...nums),
-    };
-  }, [norm]);
+  const stickyTop = {
+    position: "sticky",
+    top: 0,
+    background: "var(--table-header-bg)",
+    zIndex: 4,
+  };
+  const thBase = {
+    whiteSpace: "nowrap",
+    fontWeight: 700,
+    borderBottom: "1px solid var(--border)",
+  };
+  const numCell = {
+    textAlign: "right",
+    fontVariantNumeric: "tabular-nums",
+    whiteSpace: "nowrap",
+  };
+  const centerCell = { textAlign: "center", whiteSpace: "nowrap" };
+  const stickyLeftTH = (px) => ({
+    position: "sticky",
+    top: 0,
+    left: px,
+    background: "var(--table-header-bg)",
+    zIndex: 6,
+    boxShadow: px
+      ? "var(--table-sticky-shadow-left)"
+      : "inset 0 -1px 0 var(--border)",
+  });
+  const stickyLeftTD = (px) => ({
+    position: "sticky",
+    left: px,
+    background: "var(--panel)",
+    zIndex: 5,
+    boxShadow: px ? "var(--table-sticky-shadow-left)" : "none",
+  });
 
+  const fmtNum = (v) =>
+    v == null || v === "" || Number.isNaN(Number(v)) ? "-" : Number(v);
+  const tahapLabel = (t) => (t === 0 ? "Terbaru" : t);
+
+  // ==== Render ====
   return (
     <>
       <div
@@ -510,29 +570,23 @@ function JasmaniTable({ rows, rank }) {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0,1fr))",
+            gridTemplateColumns: "repeat(4, 1fr)",
             gap: 12,
           }}
         >
-          <SummaryItem label="Jumlah Data">
-            {summary.count.toString()}
-          </SummaryItem>
+          <SummaryItem label="Jumlah Data">{stats.count}</SummaryItem>
           <SummaryItem label="Rata-rata">
-            {summary.avg == null ? "-" : summary.avg.toFixed(2)}
+            {stats.avg == null ? "-" : stats.avg.toFixed(2)}
           </SummaryItem>
-          <SummaryItem label="Nilai Minimum">
-            {summary.min == null ? "-" : summary.min}
-          </SummaryItem>
-          <SummaryItem label="Nilai Maksimum">
-            {summary.max == null ? "-" : summary.max}
-          </SummaryItem>
+          <SummaryItem label="Nilai Minimum">{stats.min ?? "-"}</SummaryItem>
+          <SummaryItem label="Nilai Maksimum">{stats.max ?? "-"}</SummaryItem>
         </div>
 
         {rank ? (
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0,1fr))",
+              gridTemplateColumns: "repeat(4, 1fr)",
               gap: 12,
             }}
           >
@@ -558,47 +612,110 @@ function JasmaniTable({ rows, rank }) {
           </div>
         ) : null}
       </div>
-
-      {norm.length ? (
-        <div style={{ overflowX: "auto" }}>
-          <table
-            className="table"
-            style={{ width: "100%", color: "var(--text)" }}
-          >
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
-                  Jenis Test
-                </th>
-                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
-                  Nilai
-                </th>
-                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
-                  Catatan
-                </th>
-                <th style={{ textAlign: "left", whiteSpace: "nowrap" }}>
-                  Created At
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {norm.map((r, i) => (
-                <tr key={i}>
-                  <td style={{ whiteSpace: "nowrap" }}>{r.jenis || "-"}</td>
-                  <td style={{ whiteSpace: "nowrap" }}>{r.nilai ?? "-"}</td>
-                  <td style={{ maxWidth: 600, overflowWrap: "anywhere" }}>
-                    {r.catatan ?? "-"}
-                  </td>
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    {r.time ? r.time.toLocaleString("id-ID") : "-"}
-                  </td>
+      {tahapList.length ? (
+        <div className="table-scroll-wrapper">
+          <div style={{ display: "inline-block", minWidth: "100%" }}>
+            <table
+              className="table"
+              style={{
+                width: "100%",
+                minWidth: 900,
+                borderCollapse: "separate",
+                borderSpacing: 0,
+                color: "var(--text)",
+              }}
+            >
+              <thead>
+                <tr>
+                  <th
+                    rowSpan={2}
+                    style={{
+                      ...thBase,
+                      ...stickyLeftTH(0),
+                      textAlign: "left",
+                      minWidth: W_TAHAP,
+                      width: W_TAHAP,
+                    }}
+                  >
+                    Tahap
+                  </th>
+                  {GROUPS.map((g) => (
+                    <Fragment key={`grp-${g.key}`}>
+                      <th
+                        colSpan={2}
+                        style={{
+                          ...thBase,
+                          ...stickyTop,
+                          textAlign: "center",
+                          minWidth: W_NUM * 2,
+                        }}
+                      >
+                        {g.label}
+                      </th>
+                    </Fragment>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+                <tr>
+                  {GROUPS.map((g) => (
+                    <Fragment key={`sub-${g.key}`}>
+                      <th
+                        style={{
+                          ...thBase,
+                          ...stickyTop,
+                          ...centerCell,
+                          minWidth: W_NUM,
+                        }}
+                      >
+                        TS
+                      </th>
+                      <th
+                        style={{
+                          ...thBase,
+                          ...stickyTop,
+                          ...centerCell,
+                          minWidth: W_NUM,
+                        }}
+                      >
+                        RS
+                      </th>
+                    </Fragment>
+                  ))}
+                </tr>
+              </thead>
+
+              <tbody>
+                {tahapList.map((t) => (
+                  <tr key={`row-${t}`}>
+                    <td
+                      style={{
+                        ...stickyLeftTD(0),
+                        whiteSpace: "nowrap",
+                        minWidth: W_TAHAP,
+                        width: W_TAHAP,
+                      }}
+                    >
+                      {tahapLabel(t)}
+                    </td>
+                    {GROUPS.map((g) => {
+                      const ts = matrix.get(`${t}||${g.key}||ts`);
+                      const rs = matrix.get(`${t}||${g.key}||rs`);
+                      return (
+                        <Fragment key={`cell-${t}-${g.key}`}>
+                          <td style={numCell}>{fmtNum(ts?.nilai)}</td>
+                          <td style={numCell}>{fmtNum(rs?.nilai)}</td>
+                        </Fragment>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : (
-        <div style={{ color: "var(--muted)" }}>Belum ada data.</div>
+        <div style={{ color: "var(--muted)", padding: 12 }}>
+          Belum ada data Jasmani.
+        </div>
       )}
     </>
   );
@@ -1625,6 +1742,7 @@ export default function SiswaDetail({ nik }) {
   const [biodata, setBiodata] = useState(null);
   const [dataMap, setDataMap] = useState({});
   const [mentalRank, setMentalRank] = useState(null);
+  const [jasmaniRank, setJasmaniRank] = useState(null); // <— NEW
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [deletingId, setDeletingId] = useState(null);
@@ -1698,6 +1816,33 @@ export default function SiswaDetail({ nik }) {
         } catch (e) {
           console.warn("[rank] fetch error:", e.message);
           setMentalRank(null);
+        }
+      }
+
+      // === NEW: kalau tab "jasmani", ambil overview+ranking (batalion/kompi/pleton)
+      if (tabKey === "jasmani") {
+        try {
+          const token2 = await window.authAPI?.getToken?.();
+          const ov = await fetchJasmaniOverviewByNik(safeNik, token2);
+          const jr = ov?.rank
+            ? {
+                angkatan: ov?.angkatan ?? null,
+                batalion: ov?.batalion ?? null,
+                kompi: ov?.kompi ?? null,
+                // pleton di UI ditampilkan "Kompi{kompi}{pleton}", kalau backend kirim "A1" ambil angkanya
+                pleton: (() => {
+                  const raw = ov?.pleton ?? ov?.pleton_label ?? null;
+                  if (raw == null) return null;
+                  const num = String(raw).replace(/^\D+/, "");
+                  return num ? Number(num) : null;
+                })(),
+                rank: ov.rank, // { global, batalion, kompi, pleton }
+              }
+            : null;
+          setJasmaniRank(jr);
+        } catch (e) {
+          console.warn("[jasmani_overview] fetch error:", e?.message);
+          setJasmaniRank(null);
         }
       }
     } catch (e) {
@@ -1923,7 +2068,9 @@ export default function SiswaDetail({ nik }) {
     }
 
     if (active === "jasmani") {
-      return <JasmaniTable rows={dataMap["jasmani"] || []} rank={mentalRank} />;
+      return (
+        <JasmaniTable rows={dataMap["jasmani"] || []} rank={jasmaniRank} />
+      );
     }
 
     if (active === "jasmani_polda") {

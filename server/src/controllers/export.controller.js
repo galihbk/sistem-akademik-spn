@@ -86,7 +86,7 @@ async function getAllDataByNik(nik) {
       [siswaId]
     ),
     pool.query(
-      `SELECT * FROM jasmani WHERE siswa_id = $1 ORDER BY created_at ASC`,
+      `SELECT * FROM jasmani_spn WHERE siswa_id = $1 ORDER BY created_at ASC`,
       [siswaId]
     ),
     // Riwayat kesehatan: TANPA file_path
@@ -839,11 +839,10 @@ function sanitizeMapelSort({ sort_by, sort_dir }) {
 
 async function exportMapelXlsx(req, res) {
   try {
-    const q = String(req.query.q || "").trim(); // cari nama/nosis/mapel
-    const angkatan = String(req.query.angkatan || "").trim(); // filter kelompok_angkatan
-    const semester = String(req.query.semester || "").trim(); // opsional
-    const mapelName = String(req.query.mapel || "").trim(); // opsional
-    // NOTE: selalu ekspor semua (abaikan page/limit). Kita tetap baca 'all' bila ada:
+    const q = String(req.query.q || "").trim();
+    const angkatan = String(req.query.angkatan || "").trim();
+    const semester = String(req.query.semester || "").trim();
+    const mapelName = String(req.query.mapel || "").trim();
     const all = String(req.query.all || "1") === "1";
 
     const { col: sortCol, dir: sortDir } = sanitizeMapelSort({
@@ -851,6 +850,113 @@ async function exportMapelXlsx(req, res) {
       sort_dir: req.query.sort_dir,
     });
 
+    // Jika mapel tidak diisi → fallback ke export flat lama (aman).
+    if (!mapelName) {
+      // ===== EXPORT FLAT (seperti sebelumnya) =====
+      const where = [];
+      const params = [];
+      let p = 1;
+
+      if (angkatan) {
+        where.push(`COALESCE(s.kelompok_angkatan, '') = $${p++}`);
+        params.push(angkatan);
+      }
+      if (semester) {
+        where.push(`COALESCE(m.semester, '') = $${p++}`);
+        params.push(semester);
+      }
+      if (q) {
+        where.push(`(
+          LOWER(COALESCE(s.nama,''))   LIKE LOWER($${p})
+          OR LOWER(COALESCE(s.nosis,'')) LIKE LOWER($${p})
+          OR LOWER(COALESCE(m.mapel,'')) LIKE LOWER($${p})
+        )`);
+        params.push(`%${q}%`);
+        p++;
+      }
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+      const sql = `
+        SELECT
+          s.nosis, s.nama, s.kelompok_angkatan, s.batalion, s.ton,
+          m.mapel, m.semester, m.pertemuan, m.nilai, m.catatan, m.created_at, m.updated_at
+        FROM mapel m
+        JOIN siswa s ON s.id = m.siswa_id
+        ${whereSql}
+        ORDER BY ${sortCol} ${sortDir}, s.nosis ASC, m.mapel ASC, m.pertemuan ASC
+        ${all ? "" : "LIMIT 1000"}
+      `;
+      const { rows } = await pool.query(sql, params);
+
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Mapel (Flat)");
+      ws.columns = [
+        { header: "NOSIS", key: "nosis", width: 14 },
+        { header: "Nama", key: "nama", width: 28 },
+        { header: "Angkatan", key: "kelompok_angkatan", width: 14 },
+        { header: "Batalion", key: "batalion", width: 12 },
+        { header: "Ton", key: "ton", width: 10 },
+        { header: "Mapel", key: "mapel", width: 20 },
+        { header: "Semester", key: "semester", width: 12 },
+        { header: "Pertemuan", key: "pertemuan", width: 12 },
+        { header: "Nilai", key: "nilai", width: 12 },
+        { header: "Catatan", key: "catatan", width: 30 },
+        {
+          header: "Created At",
+          key: "created_at",
+          width: 20,
+          style: { numFmt: "yyyy-mm-dd hh:mm" },
+        },
+        {
+          header: "Updated At",
+          key: "updated_at",
+          width: 20,
+          style: { numFmt: "yyyy-mm-dd hh:mm" },
+        },
+      ];
+      ws.getRow(1).font = { bold: true };
+
+      for (const r of rows) {
+        ws.addRow({
+          nosis: r.nosis ?? "",
+          nama: r.nama ?? "",
+          kelompok_angkatan: r.kelompok_angkatan ?? "",
+          batalion: r.batalion ?? "",
+          ton: r.ton ?? "",
+          mapel: r.mapel ?? "",
+          semester: r.semester ?? "",
+          pertemuan: r.pertemuan ?? null,
+          nilai: r.nilai ?? "",
+          catatan: r.catatan ?? "",
+          created_at: r.created_at ? new Date(r.created_at) : null,
+          updated_at: r.updated_at ? new Date(r.updated_at) : null,
+        });
+      }
+
+      const ts = new Date();
+      const fname = `mapel${
+        angkatan ? `-angkatan-${angkatan}` : ""
+      }-${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}${String(ts.getDate()).padStart(2, "0")}-${String(
+        ts.getHours()
+      ).padStart(2, "0")}${String(ts.getMinutes()).padStart(2, "0")}${String(
+        ts.getSeconds()
+      ).padStart(2, "0")}.xlsx`;
+      const arrBuf = await wb.xlsx.writeBuffer();
+      const nodeBuf = Buffer.from(arrBuf);
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader("Content-Length", String(nodeBuf.length));
+      res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+      if (req.method === "HEAD") return res.status(200).end();
+      return res.status(200).send(nodeBuf);
+    }
+
+    // ===== EXPORT PIVOT (pertemuan ke samping) untuk mapel tertentu =====
     const where = [];
     const params = [];
     let p = 1;
@@ -863,114 +969,213 @@ async function exportMapelXlsx(req, res) {
       where.push(`COALESCE(m.semester, '') = $${p++}`);
       params.push(semester);
     }
-    if (mapelName) {
-      where.push(`LOWER(COALESCE(m.mapel,'')) = LOWER($${p++})`);
-      params.push(mapelName);
-    }
+    // mapelName WAJIB di jalur pivot
+    where.push(`LOWER(COALESCE(m.mapel,'')) = LOWER($${p++})`);
+    params.push(mapelName);
+
     if (q) {
       where.push(`(
-        LOWER(COALESCE(s.nama,''))    LIKE LOWER($${p})
+        LOWER(COALESCE(s.nama,'')) LIKE LOWER($${p})
         OR LOWER(COALESCE(s.nosis,'')) LIKE LOWER($${p})
-        OR LOWER(COALESCE(m.mapel,'')) LIKE LOWER($${p})
       )`);
       params.push(`%${q}%`);
       p++;
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-    // Query data raw mapel + identitas siswa
-    const sql = `
-      SELECT
-        s.nosis,
-        s.nama,
-        s.kelompok_angkatan,
-        s.batalion,
-        s.ton,
-        m.mapel,
-        m.semester,
-        m.pertemuan,
-        m.nilai,
-        m.catatan,
-        m.created_at,
-        m.updated_at
+    // 1) ambil daftar pertemuan (minggu) yang relevan
+    const weeksSql = `
+      SELECT DISTINCT m.pertemuan AS w
       FROM mapel m
       JOIN siswa s ON s.id = m.siswa_id
       ${whereSql}
-      ORDER BY ${sortCol} ${sortDir}, s.nosis ASC, m.mapel ASC, m.pertemuan ASC
-      ${all ? "" : "LIMIT 1000"}
+      ORDER BY 1 ASC
     `;
-    const { rows } = await pool.query(sql, params);
+    const weekRes = await pool.query(weeksSql, params);
+    const weeks = weekRes.rows
+      .map((r) => Number(r.w))
+      .filter((n) => Number.isFinite(n))
+      .sort((a, b) => a - b);
 
-    // Build workbook -> buffer
+    // 2) Query utama: base → agg → ranks → pivot
+    const pivotExprs = weeks.length
+      ? weeks
+          .map(
+            (w) =>
+              `MAX(CASE WHEN b.pertemuan = ${w} THEN b.nilai_num END) AS "Pertemuan ${w}"`
+          )
+          .join(",\n          ")
+      : `NULL::numeric AS "_no_weeks_"`;
+
+    const sql = `
+      WITH base AS (
+        SELECT
+          s.id AS siswa_id,
+          s.nosis,
+          s.nama,
+          s.kelompok_angkatan,
+          s.batalion,
+          s.ton,
+          UPPER(NULLIF(regexp_replace(COALESCE(s.ton,''), '[^A-Za-z].*', ''), '')) AS kompi,
+          CASE
+            WHEN regexp_replace(COALESCE(s.ton,''), '\\D+', '', 'g') <> '' THEN
+              (regexp_replace(s.ton, '\\D+', '', 'g'))::int
+            ELSE NULL
+          END AS pleton,
+          m.pertemuan,
+          (CASE WHEN m.nilai ~ '^-?\\d+(\\.\\d+)?$' THEN m.nilai::numeric ELSE NULL END) AS nilai_num
+        FROM mapel m
+        JOIN siswa s ON s.id = m.siswa_id
+        ${whereSql}
+      ),
+      agg AS (
+        SELECT
+          siswa_id, nosis, nama, kelompok_angkatan, batalion, ton, kompi, pleton,
+          SUM(nilai_num)::numeric(20,3) AS sum_nilai,
+          AVG(nilai_num)::numeric(20,3) AS avg_nilai
+        FROM base
+        GROUP BY siswa_id, nosis, nama, kelompok_angkatan, batalion, ton, kompi, pleton
+      ),
+      ranks AS (
+        SELECT
+          a.*,
+          RANK() OVER (ORDER BY a.avg_nilai DESC NULLS LAST) AS rk_global,
+          COUNT(*) OVER () AS total_global,
+          RANK() OVER (PARTITION BY a.batalion ORDER BY a.avg_nilai DESC NULLS LAST) AS rk_batalion,
+          COUNT(*) OVER (PARTITION BY a.batalion) AS total_batalion,
+          RANK() OVER (PARTITION BY a.kompi ORDER BY a.avg_nilai DESC NULLS LAST) AS rk_kompi,
+          COUNT(*) OVER (PARTITION BY a.kompi) AS total_kompi,
+          RANK() OVER (PARTITION BY a.pleton ORDER BY a.avg_nilai DESC NULLS LAST) AS rk_pleton,
+          COUNT(*) OVER (PARTITION BY a.pleton) AS total_pleton
+        FROM agg a
+      ),
+      pivot AS (
+        SELECT
+          b.siswa_id
+          ${weeks.length ? "," : ""}
+          ${pivotExprs}
+        FROM base b
+        GROUP BY b.siswa_id
+      )
+      SELECT
+        r.nosis, r.nama, r.kelompok_angkatan, r.batalion, r.kompi, r.pleton,
+        r.sum_nilai, r.avg_nilai,
+        r.rk_global, r.total_global,
+        r.rk_batalion, r.total_batalion,
+        r.rk_kompi, r.total_kompi,
+        r.rk_pleton, r.total_pleton
+        ${weeks.length ? "," : ""}
+        ${weeks.map((w) => `"Pertemuan ${w}"`).join(", ")}
+      FROM ranks r
+      LEFT JOIN pivot p ON p.siswa_id = r.siswa_id
+      ORDER BY ${
+        sortCol === "nosis" ? "r.nosis" : "r.nama"
+      } ${sortDir}, r.nosis ASC
+    `;
+
+    const dataRes = await pool.query(sql, params);
+    const rows = dataRes.rows || [];
+
+    // 3) Build Excel (pivot)
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("Mapel");
+    const sheetTitle = `Rekap ${mapelName}${
+      semester ? ` (Smt ${semester})` : ""
+    }`;
+    const ws = wb.addWorksheet(sheetTitle.substring(0, 31)); // excel limit 31 chars
 
-    ws.columns = [
+    const baseCols = [
       { header: "NOSIS", key: "nosis", width: 14 },
       { header: "Nama", key: "nama", width: 28 },
       { header: "Angkatan", key: "kelompok_angkatan", width: 14 },
       { header: "Batalion", key: "batalion", width: 12 },
-      { header: "Ton", key: "ton", width: 10 },
-      { header: "Mapel", key: "mapel", width: 20 },
-      { header: "Semester", key: "semester", width: 12 },
-      { header: "Pertemuan", key: "pertemuan", width: 12 },
-      { header: "Nilai", key: "nilai", width: 12 },
-      { header: "Catatan", key: "catatan", width: 30 },
+      { header: "Kompi", key: "kompi", width: 10 },
+      { header: "Pleton", key: "pleton", width: 10 },
       {
-        header: "Created At",
-        key: "created_at",
-        width: 20,
-        style: { numFmt: "yyyy-mm-dd hh:mm" },
+        header: "Jumlah",
+        key: "sum_nilai",
+        width: 14,
+        style: { numFmt: "0.000" },
       },
       {
-        header: "Updated At",
-        key: "updated_at",
-        width: 20,
-        style: { numFmt: "yyyy-mm-dd hh:mm" },
+        header: "Rata-rata",
+        key: "avg_nilai",
+        width: 14,
+        style: { numFmt: "0.000" },
       },
+      { header: "R. Global", key: "rk_global_disp", width: 12 },
+      { header: "R. Batalion", key: "rk_batalion_disp", width: 12 },
+      { header: "R. Kompi", key: "rk_kompi_disp", width: 12 },
+      { header: "R. Pleton", key: "rk_pleton_disp", width: 12 },
     ];
+    const weekCols = weeks.map((w) => ({
+      header: `Pertemuan ${w}`,
+      key: `pertemuan_${w}`,
+      width: 13,
+      style: { numFmt: "0.000" },
+    }));
+    ws.columns = [...baseCols, ...weekCols];
     ws.getRow(1).font = { bold: true };
 
     for (const r of rows) {
-      ws.addRow({
+      const obj = {
         nosis: r.nosis ?? "",
         nama: r.nama ?? "",
         kelompok_angkatan: r.kelompok_angkatan ?? "",
         batalion: r.batalion ?? "",
-        ton: r.ton ?? "",
-        mapel: r.mapel ?? "",
-        semester: r.semester ?? "",
-        pertemuan: r.pertemuan ?? null,
-        nilai: r.nilai ?? "",
-        catatan: r.catatan ?? "",
-        created_at: r.created_at ? new Date(r.created_at) : null,
-        updated_at: r.updated_at ? new Date(r.updated_at) : null,
-      });
+        kompi: r.kompi ?? "",
+        pleton: r.pleton ?? "",
+        sum_nilai: r.sum_nilai != null ? Number(r.sum_nilai) : null,
+        avg_nilai: r.avg_nilai != null ? Number(r.avg_nilai) : null,
+        rk_global_disp:
+          r.rk_global != null && r.total_global
+            ? `${r.rk_global}/${r.total_global}`
+            : "-",
+        rk_batalion_disp:
+          r.rk_batalion != null && r.total_batalion
+            ? `${r.rk_batalion}/${r.total_batalion}`
+            : "-",
+        rk_kompi_disp:
+          r.rk_kompi != null && r.total_kompi
+            ? `${r.rk_kompi}/${r.total_kompi}`
+            : "-",
+        rk_pleton_disp:
+          r.rk_pleton != null && r.total_pleton
+            ? `${r.rk_pleton}/${r.total_pleton}`
+            : "-",
+      };
+      for (const w of weeks) {
+        const colName = `Pertemuan ${w}`;
+        obj[`pertemuan_${w}`] = r[colName] != null ? Number(r[colName]) : null;
+      }
+      ws.addRow(obj);
     }
 
+    // 4) Kirim response
     const ts = new Date();
     const y = ts.getFullYear();
-    const m = String(ts.getMonth() + 1).padStart(2, "0");
-    const d = String(ts.getDate()).padStart(2, "0");
+    const m2 = String(ts.getMonth() + 1).padStart(2, "0");
+    const d2 = String(ts.getDate()).padStart(2, "0");
     const hh = String(ts.getHours()).padStart(2, "0");
-    const mm = String(ts.getMinutes()).padStart(2, "0");
+    const mm2 = String(ts.getMinutes()).padStart(2, "0");
     const ss = String(ts.getSeconds()).padStart(2, "0");
     const labelAngkatan = angkatan ? `-angkatan-${angkatan}` : "";
-    const fname = `mapel${labelAngkatan}-${y}${m}${d}-${hh}${mm}${ss}.xlsx`;
+    const labelMapel = mapelName ? `-mapel-${mapelName}` : "";
+    const labelSemester = semester ? `-semester-${semester}` : "";
+    const fname = `rekap-mapel${labelAngkatan}${labelMapel}${labelSemester}-${y}${m2}${d2}-${hh}${mm2}${ss}.xlsx`;
 
     const arrBuf = await wb.xlsx.writeBuffer();
     const nodeBuf = Buffer.from(arrBuf);
-
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     );
     res.setHeader("Content-Length", String(nodeBuf.length));
     res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+    if (req.method === "HEAD") return res.status(200).end();
     return res.status(200).send(nodeBuf);
   } catch (e) {
-    console.error("[export.mapel.xlsx]", e);
-    return res.status(500).send("Gagal membuat Excel Mapel.");
+    console.error("[export.mapel.xlsx pivot]", e);
+    return res.status(500).send("Gagal membuat Excel Mapel (pivot).");
   }
 }
 
@@ -999,7 +1204,7 @@ async function exportJasmaniRekapExcel(req, res) {
   try {
     const q = String(req.query.q || "").trim();
     const angkatan = String(req.query.angkatan || "").trim();
-    const tahapInput = String(req.query.tahap ?? "").trim(); // "" = auto jika kolom ada
+    const tahapInput = String(req.query.tahap ?? "").trim(); // "" = auto
     const { col: sortCol, dir: sortDir } = sanitizeSimpleSort({
       sort_by: req.query.sort_by,
       sort_dir: req.query.sort_dir,
@@ -1025,8 +1230,8 @@ async function exportJasmaniRekapExcel(req, res) {
       ? `WHERE ${whereParts.join(" AND ")}`
       : "";
 
-    // Cek apakah ada kolom `tahap`
-    const hasTahap = await tableHasColumn("jasmani", "tahap");
+    // Cek apakah tabel jasmani_spn punya kolom tahap
+    const hasTahap = await tableHasColumn("jasmani_spn", "tahap");
 
     // Tentukan tahapFinal bila kolom ada
     let tahapFinal = null;
@@ -1038,14 +1243,17 @@ async function exportJasmaniRekapExcel(req, res) {
       if (tahapFinal == null) {
         const maxSql = `
           SELECT MAX(j.tahap)::int AS max_tahap
-          FROM jasmani j
+          FROM jasmani_spn j
           JOIN siswa s ON s.id = j.siswa_id
           ${whereSQL}
         `;
         const maxRes = await pool.query(maxSql, params);
         tahapFinal = maxRes.rows?.[0]?.max_tahap ?? null;
         if (tahapFinal == null) {
-          // tidak ada data untuk filter tsb
+          // tidak ada data → kembalikan file kosong yang informatif
+          const wbEmpty = new ExcelJS.Workbook();
+          const wsEmpty = wbEmpty.addWorksheet("Rekap Jasmani");
+          wsEmpty.addRow(["Tidak ada data untuk filter ini"]);
           res.setHeader(
             "Content-Type",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -1054,8 +1262,6 @@ async function exportJasmaniRekapExcel(req, res) {
             "Content-Disposition",
             `attachment; filename="rekap-jasmani-empty.xlsx"`
           );
-          const wbEmpty = new ExcelJS.Workbook();
-          wbEmpty.addWorksheet("Rekap Jasmani").addRow(["Tidak ada data"]);
           await wbEmpty.xlsx.write(res);
           return res.end();
         }
@@ -1068,11 +1274,7 @@ async function exportJasmaniRekapExcel(req, res) {
         WITH base AS (
           SELECT
             s.id AS siswa_id,
-            s.nosis,
-            s.nama,
-            s.kelompok_angkatan,
-            s.batalion,
-            s.ton,
+            s.nosis, s.nama, s.kelompok_angkatan, s.batalion, s.ton,
             UPPER(NULLIF(regexp_replace(COALESCE(s.ton,''), '[^A-Za-z].*', ''), '')) AS kompi,
             CASE
               WHEN regexp_replace(COALESCE(s.ton,''), '\\D+', '', 'g') <> '' THEN
@@ -1080,19 +1282,19 @@ async function exportJasmaniRekapExcel(req, res) {
               ELSE NULL
             END AS pleton,
             j.tahap,
-            NULLIF(j.lari_12_menit_ts, '')::numeric   AS lari_12_menit_ts,
-            NULLIF(j.lari_12_menit_rs, '')::numeric   AS lari_12_menit_rs,
-            NULLIF(j.sit_up_ts, '')::numeric          AS sit_up_ts,
-            NULLIF(j.sit_up_rs, '')::numeric          AS sit_up_rs,
-            NULLIF(j.shuttle_run_ts, '')::numeric     AS shuttle_run_ts,
-            NULLIF(j.shuttle_run_rs, '')::numeric     AS shuttle_run_rs,
-            NULLIF(j.push_up_ts, '')::numeric         AS push_up_ts,
-            NULLIF(j.push_up_rs, '')::numeric         AS push_up_rs,
-            NULLIF(j.pull_up_ts, '')::numeric         AS pull_up_ts,
-            NULLIF(j.pull_up_rs, '')::numeric         AS pull_up_rs,
-            NULLIF(j.nilai_akhir, '')::numeric        AS nilai_akhir,
+            j.lari_12_menit_ts::numeric   AS lari_12_menit_ts,
+            j.lari_12_menit_rs::numeric   AS lari_12_menit_rs,
+            j.sit_up_ts::numeric          AS sit_up_ts,
+            j.sit_up_rs::numeric          AS sit_up_rs,
+            j.shuttle_run_ts::numeric     AS shuttle_run_ts,
+            j.shuttle_run_rs::numeric     AS shuttle_run_rs,
+            j.push_up_ts::numeric         AS push_up_ts,
+            j.push_up_rs::numeric         AS push_up_rs,
+            j.pull_up_ts::numeric         AS pull_up_ts,
+            j.pull_up_rs::numeric         AS pull_up_rs,
+            j.nilai_akhir::numeric        AS nilai_akhir,
             j.keterangan
-          FROM jasmani j
+          FROM jasmani_spn j
           JOIN siswa s ON s.id = j.siswa_id
           ${whereSQL}
             ${whereSQL ? "AND" : "WHERE"} j.tahap = $${p}
@@ -1115,21 +1317,16 @@ async function exportJasmaniRekapExcel(req, res) {
         ORDER BY ${sortCol === "nosis" ? "nosis" : "nama"} ${sortDir}, nosis ASC
       `
       : `
-        -- Tidak ada kolom tahap: ambil baris TERBARU per siswa (created_at paling baru)
+        -- Tidak filter tahap: ambil baris TERBARU per siswa (created_at paling baru)
         WITH latest AS (
-          SELECT DISTINCT ON (j.siswa_id)
-            j.* 
-          FROM jasmani j
+          SELECT DISTINCT ON (j.siswa_id) j.*
+          FROM jasmani_spn j
           ORDER BY j.siswa_id, j.created_at DESC
         ),
         base AS (
           SELECT
             s.id AS siswa_id,
-            s.nosis,
-            s.nama,
-            s.kelompok_angkatan,
-            s.batalion,
-            s.ton,
+            s.nosis, s.nama, s.kelompok_angkatan, s.batalion, s.ton,
             UPPER(NULLIF(regexp_replace(COALESCE(s.ton,''), '[^A-Za-z].*', ''), '')) AS kompi,
             CASE
               WHEN regexp_replace(COALESCE(s.ton,''), '\\D+', '', 'g') <> '' THEN
@@ -1137,17 +1334,17 @@ async function exportJasmaniRekapExcel(req, res) {
               ELSE NULL
             END AS pleton,
             NULL::int AS tahap,
-            NULLIF(l.lari_12_menit_ts, '')::numeric   AS lari_12_menit_ts,
-            NULLIF(l.lari_12_menit_rs, '')::numeric   AS lari_12_menit_rs,
-            NULLIF(l.sit_up_ts, '')::numeric          AS sit_up_ts,
-            NULLIF(l.sit_up_rs, '')::numeric          AS sit_up_rs,
-            NULLIF(l.shuttle_run_ts, '')::numeric     AS shuttle_run_ts,
-            NULLIF(l.shuttle_run_rs, '')::numeric     AS shuttle_run_rs,
-            NULLIF(l.push_up_ts, '')::numeric         AS push_up_ts,
-            NULLIF(l.push_up_rs, '')::numeric         AS push_up_rs,
-            NULLIF(l.pull_up_ts, '')::numeric         AS pull_up_ts,
-            NULLIF(l.pull_up_rs, '')::numeric         AS pull_up_rs,
-            NULLIF(l.nilai_akhir, '')::numeric        AS nilai_akhir,
+            l.lari_12_menit_ts::numeric   AS lari_12_menit_ts,
+            l.lari_12_menit_rs::numeric   AS lari_12_menit_rs,
+            l.sit_up_ts::numeric          AS sit_up_ts,
+            l.sit_up_rs::numeric          AS sit_up_rs,
+            l.shuttle_run_ts::numeric     AS shuttle_run_ts,
+            l.shuttle_run_rs::numeric     AS shuttle_run_rs,
+            l.push_up_ts::numeric         AS push_up_ts,
+            l.push_up_rs::numeric         AS push_up_rs,
+            l.pull_up_ts::numeric         AS pull_up_ts,
+            l.pull_up_rs::numeric         AS pull_up_rs,
+            l.nilai_akhir::numeric        AS nilai_akhir,
             l.keterangan
           FROM latest l
           JOIN siswa s ON s.id = l.siswa_id
@@ -1176,86 +1373,154 @@ async function exportJasmaniRekapExcel(req, res) {
       hasTahap ? [...params, tahapFinal] : params
     );
 
-    // Build Excel
+    // ===== Build Excel: header 2-level seperti UI RekapJasmani.jsx =====
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Rekap Jasmani");
 
-    ws.columns = [
-      { header: "NOSIS", key: "nosis", width: 14 },
-      { header: "Nama", key: "nama", width: 28 },
-      { header: "Angkatan", key: "kelompok_angkatan", width: 14 },
-      { header: "Batalion", key: "batalion", width: 12 },
-      { header: "Kompi", key: "kompi", width: 10 },
-      { header: "Pleton", key: "pleton", width: 10 },
-      { header: "Tahap", key: "tahap", width: 8 },
-
-      { header: "R. Global", key: "rk_global_disp", width: 12 },
-      { header: "R. Batalion", key: "rk_batalion_disp", width: 12 },
-      { header: "R. Kompi", key: "rk_kompi_disp", width: 12 },
-      { header: "R. Pleton", key: "rk_pleton_disp", width: 12 },
-
-      { header: "Lari 12' TS", key: "lari_12_menit_ts", width: 12 },
-      { header: "Lari 12' RS", key: "lari_12_menit_rs", width: 12 },
-      { header: "Sit Up TS", key: "sit_up_ts", width: 12 },
-      { header: "Sit Up RS", key: "sit_up_rs", width: 12 },
-      { header: "Shuttle Run TS", key: "shuttle_run_ts", width: 14 },
-      { header: "Shuttle Run RS", key: "shuttle_run_rs", width: 14 },
-      { header: "Push Up TS", key: "push_up_ts", width: 12 },
-      { header: "Push Up RS", key: "push_up_rs", width: 12 },
-      { header: "Pull Up TS", key: "pull_up_ts", width: 12 },
-      { header: "Pull Up RS", key: "pull_up_rs", width: 12 },
-
-      { header: "Nilai Akhir", key: "nilai_akhir", width: 14 },
-      { header: "Keterangan", key: "keterangan", width: 30 },
+    // Baris 1 (judul grup) & Baris 2 (subjudul TS/RS)
+    const row1 = [
+      "NOSIS",
+      "Nama",
+      "Angkatan",
+      "Tahap",
+      "R. Batalion",
+      "R. Kompi",
+      "R. Pleton",
+      "Lari 12 Menit",
+      "",
+      "Sit Up",
+      "",
+      "Shuttle Run",
+      "",
+      "Push Up",
+      "",
+      "Pull Up",
+      "",
+      "Nilai Akhir",
+      "Keterangan",
     ];
-    ws.getRow(1).font = { bold: true };
+    const row2 = [
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "TS",
+      "RS",
+      "TS",
+      "RS",
+      "TS",
+      "RS",
+      "TS",
+      "RS",
+      "TS",
+      "RS",
+      "",
+      "",
+    ];
 
+    ws.addRow(row1);
+    ws.addRow(row2);
+
+    // Merge header
+    [
+      "A1:A2",
+      "B1:B2",
+      "C1:C2",
+      "D1:D2",
+      "E1:E2",
+      "F1:F2",
+      "G1:G2",
+      "H1:I1",
+      "J1:K1",
+      "L1:M1",
+      "N1:O1",
+      "P1:Q1",
+      "R1:R2",
+      "S1:S2",
+    ].forEach((r) => ws.mergeCells(r));
+
+    // Styling header
+    [1, 2].forEach((rn) => {
+      const r = ws.getRow(rn);
+      r.font = { bold: true };
+      r.alignment = {
+        vertical: "middle",
+        horizontal: "center",
+        wrapText: true,
+      };
+    });
+
+    // Lebar kolom
+    const widths = {
+      A: 14,
+      B: 28,
+      C: 14,
+      D: 8,
+      E: 12,
+      F: 10,
+      G: 10,
+      H: 12,
+      I: 12,
+      J: 12,
+      K: 12,
+      L: 14,
+      M: 14,
+      N: 12,
+      O: 12,
+      P: 12,
+      Q: 12,
+      R: 14,
+      S: 30,
+    };
+    Object.entries(widths).forEach(([col, w]) => (ws.getColumn(col).width = w));
+
+    // Format angka untuk metrik & nilai akhir
+    ["H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R"].forEach((c) => {
+      ws.getColumn(c).numFmt = "0.000";
+    });
+
+    // Data
     for (const r of rows) {
-      ws.addRow({
-        nosis: r.nosis ?? "",
-        nama: r.nama ?? "",
-        kelompok_angkatan: r.kelompok_angkatan ?? "",
-        batalion: r.batalion ?? "",
-        kompi: r.kompi ?? "",
-        pleton: r.pleton ?? "",
-        tahap: r.tahap ?? null,
+      ws.addRow([
+        r.nosis ?? "",
+        r.nama ?? "",
+        r.kelompok_angkatan ?? "",
+        r.tahap ?? null,
+        r.rk_batalion != null && r.total_batalion
+          ? `${r.rk_batalion}/${r.total_batalion}`
+          : "-",
+        r.rk_kompi != null && r.total_kompi
+          ? `${r.rk_kompi}/${r.total_kompi}`
+          : "-",
+        r.rk_pleton != null && r.total_pleton
+          ? `${r.rk_pleton}/${r.total_pleton}`
+          : "-",
 
-        rk_global_disp:
-          r.rk_global != null && r.total_global
-            ? `${r.rk_global}/${r.total_global}`
-            : "-",
-        rk_batalion_disp:
-          r.rk_batalion != null && r.total_batalion
-            ? `${r.rk_batalion}/${r.total_batalion}`
-            : "-",
-        rk_kompi_disp:
-          r.rk_kompi != null && r.total_kompi
-            ? `${r.rk_kompi}/${r.total_kompi}`
-            : "-",
-        rk_pleton_disp:
-          r.rk_pleton != null && r.total_pleton
-            ? `${r.rk_pleton}/${r.total_pleton}`
-            : "-",
+        r.lari_12_menit_ts != null ? Number(r.lari_12_menit_ts) : null,
+        r.lari_12_menit_rs != null ? Number(r.lari_12_menit_rs) : null,
 
-        lari_12_menit_ts:
-          r.lari_12_menit_ts != null ? Number(r.lari_12_menit_ts) : null,
-        lari_12_menit_rs:
-          r.lari_12_menit_rs != null ? Number(r.lari_12_menit_rs) : null,
-        sit_up_ts: r.sit_up_ts != null ? Number(r.sit_up_ts) : null,
-        sit_up_rs: r.sit_up_rs != null ? Number(r.sit_up_rs) : null,
-        shuttle_run_ts:
-          r.shuttle_run_ts != null ? Number(r.shuttle_run_ts) : null,
-        shuttle_run_rs:
-          r.shuttle_run_rs != null ? Number(r.shuttle_run_rs) : null,
-        push_up_ts: r.push_up_ts != null ? Number(r.push_up_ts) : null,
-        push_up_rs: r.push_up_rs != null ? Number(r.push_up_rs) : null,
-        pull_up_ts: r.pull_up_ts != null ? Number(r.pull_up_ts) : null,
-        pull_up_rs: r.pull_up_rs != null ? Number(r.pull_up_rs) : null,
+        r.sit_up_ts != null ? Number(r.sit_up_ts) : null,
+        r.sit_up_rs != null ? Number(r.sit_up_rs) : null,
 
-        nilai_akhir: r.nilai_akhir != null ? Number(r.nilai_akhir) : null,
-        keterangan: r.keterangan ?? "",
-      });
+        r.shuttle_run_ts != null ? Number(r.shuttle_run_ts) : null,
+        r.shuttle_run_rs != null ? Number(r.shuttle_run_rs) : null,
+
+        r.push_up_ts != null ? Number(r.push_up_ts) : null,
+        r.push_up_rs != null ? Number(r.push_up_rs) : null,
+
+        r.pull_up_ts != null ? Number(r.pull_up_ts) : null,
+        r.pull_up_rs != null ? Number(r.pull_up_rs) : null,
+
+        r.nilai_akhir != null ? Number(r.nilai_akhir) : null,
+        r.keterangan ?? "",
+      ]);
     }
+
+    // Freeze header dan kolom identitas
+    ws.views = [{ state: "frozen", xSplit: 7, ySplit: 2 }];
 
     // Nama file
     const ts = new Date();
@@ -1280,7 +1545,7 @@ async function exportJasmaniRekapExcel(req, res) {
     res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
     return res.status(200).send(nodeBuf);
   } catch (e) {
-    console.error("[export.jasmani_rekap.xlsx] error:", e);
+    console.error("[export.jasmani_rekap.xlsx]", e);
     return res.status(500).send("Gagal membuat Excel rekap jasmani");
   }
 }
