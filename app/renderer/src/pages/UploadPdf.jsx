@@ -1,5 +1,5 @@
 // renderer/src/pages/UploadPdf.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { fetchSiswa } from "../api/siswa";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -72,6 +72,10 @@ export default function UploadPdf({ kind }) {
   const [open, setOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
 
+  // Helper untuk SELALU baca nilai terbaru dari localStorage
+  const getJenis = () => localStorage.getItem("sa.jenis_pendidikan") || "";
+  const getAngkatan = () => localStorage.getItem("ui.angkatan") || "";
+
   // form (modal)
   const [query, setQuery] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -93,7 +97,7 @@ export default function UploadPdf({ kind }) {
   // alerts (di atas tabel)
   const [alert, setAlert] = useState({ type: "", text: "" }); // "success" | "danger" | ""
 
-  // ===== filtered siswa (client) =====
+  // hasil filter untuk popover
   const filtered = useMemo(() => {
     const q = norm(query);
     if (!q || q.length < 2) return [];
@@ -102,7 +106,7 @@ export default function UploadPdf({ kind }) {
       .slice(0, 20);
   }, [items, query]);
 
-  // debounce fetch siswa (dengan guard jika query=label selected)
+  // Debounce fetch siswa (ikutkan jenis & angkatan TERBARU)
   useEffect(() => {
     if (!open) return;
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -112,7 +116,6 @@ export default function UploadPdf({ kind }) {
       ? `${selected.nosis} — ${selected.nama}`
       : "";
 
-    // jika pendek atau sama dengan label pilihan -> jangan fetch & tutup popover
     if (q.length < 2 || (selected?.id && norm(q) === norm(selectedLabel))) {
       setItems([]);
       setOpenList(false);
@@ -122,13 +125,19 @@ export default function UploadPdf({ kind }) {
     timerRef.current = setTimeout(async () => {
       try {
         const token = await window.authAPI?.getToken?.();
-        const data = await fetchSiswa({ q, page: 1, limit: 50 }, token);
+        const jenisNow = getJenis();
+        const angkatanNow = getAngkatan();
+        const data = await fetchSiswa(
+          { q, page: 1, limit: 50, jenis: jenisNow, angkatan: angkatanNow },
+          token
+        );
         setItems(Array.isArray(data.items) ? data.items : []);
         setOpenList(true);
       } catch (e) {
         console.error("[UploadPdf] fetchSiswa:", e);
       }
     }, 300);
+
     return () => clearTimeout(timerRef.current);
   }, [query, open, selected]);
 
@@ -151,6 +160,12 @@ export default function UploadPdf({ kind }) {
       u.searchParams.set("page", "1");
       u.searchParams.set("limit", "20");
       u.searchParams.set("sort_dir", "desc");
+
+      const jenisNow = getJenis();
+      const angkatanNow = getAngkatan();
+      if (jenisNow) u.searchParams.set("jenis", jenisNow);
+      if (angkatanNow) u.searchParams.set("angkatan", angkatanNow);
+
       const r = await fetch(u.toString(), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -169,17 +184,35 @@ export default function UploadPdf({ kind }) {
       setHistLoading(false);
     }
   }
+
+  // Muat history saat buka halaman / ganti tab (bk/pelanggaran)
   useEffect(() => {
     loadHistory();
   }, [kind]);
+
+  // Auto-refresh history kalau localStorage jenis/angkatan berubah (mis. setelah login)
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === "sa.jenis_pendidikan" || e.key === "ui.angkatan") {
+        loadHistory();
+      }
+    };
+    const onFocus = () => loadHistory();
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
 
   // ====== actions ======
   function onPick(it) {
     setSelected(it);
     setQuery(`${it.nosis} — ${it.nama}`);
     setOpenList(false);
-    setItems([]); // kosongkan list agar popover tak muncul lagi
-    inputRef.current?.blur(); // tutup via blur
+    setItems([]);
+    inputRef.current?.blur();
   }
 
   async function submit() {
@@ -462,7 +495,7 @@ export default function UploadPdf({ kind }) {
                     maxHeight: 300,
                     overflow: "auto",
                     background: "#111827",
-                    border: "1px solid #334155",
+                    border: "1px solid #334155", // perbaikan: string utuh
                     borderRadius: 12,
                     padding: 8,
                     zIndex: 1010,

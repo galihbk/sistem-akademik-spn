@@ -361,11 +361,11 @@ exports.template = async (req, res) => {
     let where = "WHERE 1=1";
     if (angkatan) {
       params.push(angkatan);
-      where += ` AND TRIM(kelompok_angkatan)=TRIM($${params.length})`;
+      where += ` AND LOWER(TRIM(kelompok_angkatan)) = LOWER(TRIM($${params.length}))`;
     }
     if (jenis) {
       params.push(jenis);
-      where += ` AND TRIM(COALESCE(jenis_pendidikan,''))=TRIM($${params.length})`;
+      where += ` AND LOWER(TRIM(COALESCE(jenis_pendidikan,''))) = LOWER(TRIM($${params.length}))`;
     }
 
     const { rows } = await pool.query(
@@ -472,13 +472,13 @@ exports.rekap = async (req, res) => {
     if (angkatan) {
       params.push(angkatan);
       idxAngkatan = params.length;
-      where += ` AND TRIM(s.kelompok_angkatan) = TRIM($${idxAngkatan})`;
+      where += ` AND LOWER(TRIM(s.kelompok_angkatan)) = LOWER(TRIM($${idxAngkatan}))`;
     }
     let idxJenis = null;
     if (jenis) {
       params.push(jenis);
       idxJenis = params.length;
-      where += ` AND TRIM(COALESCE(s.jenis_pendidikan,'')) = TRIM($${idxJenis})`;
+      where += ` AND LOWER(TRIM(COALESCE(s.jenis_pendidikan,''))) = LOWER(TRIM($${idxJenis}))`;
     }
 
     // --------- TOTAL siswa match

@@ -21,6 +21,7 @@ const makeDocsRoutes = require("./routes/docs.routes");
 const mapelRoutes = require("./routes/mapel.routes");
 const jasmaniRoutes = require("./routes/jasmani.routes");
 const jasmaniPoldaRoutes = require("./routes/jasmani_polda.routes");
+const uploadRoutes = require("./routes/upload.routes");
 
 const app = express();
 const PROJECT_ROOT = process.env.PROJECT_ROOT
@@ -79,8 +80,9 @@ app.use("/prestasi", prestasiRoutes);
 app.use("/riwayat_kesehatan", riwayatRoutes);
 app.use("/export", exportRoutes);
 app.use("/mental", mentalRoutes);
-app.use("/bk", makeDocsRoutes("bk"));
-app.use("/pelanggaran", makeDocsRoutes("pelanggaran"));
+// app.use("/bk", makeDocsRoutes("bk"));
+// app.use("/pelanggaran", makeDocsRoutes("pelanggaran"));
+app.use("/", uploadRoutes);
 app.use("/mapel", mapelRoutes);
 app.use("/jasmani", jasmaniRoutes);
 app.use("/jasmani-polda", jasmaniPoldaRoutes);

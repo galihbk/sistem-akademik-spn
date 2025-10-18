@@ -93,18 +93,43 @@ exports.list = async (req, res) => {
       ? req.query.sort_dir.toLowerCase()
       : "desc";
 
+    // ⬇️ Tambahan filter
+    const angkatan = (req.query.angkatan || "").trim();
+    const jenis = (req.query.jenis || req.query.jenis_pendidikan || "").trim();
+
     const params = [];
-    let where = "WHERE 1=1";
+    const conds = [];
+
+    // filter teks (judul/nama/nosis)
     if (q) {
-      // tambahkan 3 parameter sekaligus
-      params.push(`%${q}%`, `%${q}%`, `%${q}%`);
-      where += `
-        AND (
-          LOWER(r.judul) LIKE $${params.length - 2}
-          OR LOWER(s.nama)  LIKE $${params.length - 1}
-          OR LOWER(s.nosis) LIKE $${params.length}
-        )`;
+      params.push(`%${q}%`);
+      const idx = params.length;
+      conds.push(
+        `(
+          LOWER(r.judul) LIKE $${idx}
+          OR LOWER(s.nama)  LIKE $${idx}
+          OR LOWER(s.nosis) LIKE $${idx}
+        )`
+      );
     }
+
+    // filter angkatan (kolom siswa.kelompok_angkatan)
+    if (angkatan) {
+      params.push(angkatan);
+      conds.push(
+        `LOWER(TRIM(COALESCE(s.kelompok_angkatan,''))) = LOWER(TRIM($${params.length}))`
+      );
+    }
+
+    // filter jenis (kolom siswa.jenis_pendidikan)
+    if (jenis) {
+      params.push(jenis);
+      conds.push(
+        `LOWER(TRIM(COALESCE(s.jenis_pendidikan,''))) = LOWER(TRIM($${params.length}))`
+      );
+    }
+
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
 
     const sqlData = `
       SELECT
@@ -121,7 +146,7 @@ exports.list = async (req, res) => {
       JOIN siswa s ON s.id = r.siswa_id
       ${where}
       ORDER BY r.${sortBy} ${sortDir}, r.id DESC
-      LIMIT ${limit} OFFSET ${offset};
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2};
     `;
     const sqlCount = `
       SELECT COUNT(*)::int AS total
@@ -131,7 +156,7 @@ exports.list = async (req, res) => {
     `;
 
     const [data, count] = await Promise.all([
-      pool.query(sqlData, params),
+      pool.query(sqlData, [...params, limit, offset]),
       pool.query(sqlCount, params),
     ]);
 

@@ -100,15 +100,22 @@ export default function InputRiwayatKesehatan() {
   const limit = 20;
   const [loadingList, setLoadingList] = useState(false);
   const [reload, setReload] = useState(0); // <— trigger refetch
-
+  const jenis = useMemo(
+    () => localStorage.getItem("sa.jenis_pendidikan") || "",
+    []
+  );
+  const angkatan = useMemo(() => localStorage.getItem("ui.angkatan") || "", []);
   const listUrl = useMemo(() => {
     const u = new URL(`${API}/riwayat_kesehatan`);
     if (qHist.trim()) u.searchParams.set("q", qHist.trim());
     u.searchParams.set("page", String(page));
     u.searchParams.set("limit", String(limit));
     u.searchParams.set("sort_dir", "desc");
+    // ⬇️ kirim filter
+    if (jenis) u.searchParams.set("jenis", jenis);
+    if (angkatan) u.searchParams.set("angkatan", angkatan);
     return u.toString();
-  }, [qHist, page]);
+  }, [qHist, page, jenis, angkatan]);
 
   useEffect(() => {
     let alive = true;
@@ -185,6 +192,9 @@ export default function InputRiwayatKesehatan() {
         u.searchParams.set("q", q);
         u.searchParams.set("page", "1");
         u.searchParams.set("limit", "50");
+        // ⬇️ ikutkan filter
+        if (jenis) u.searchParams.set("jenis", jenis);
+        if (angkatan) u.searchParams.set("angkatan", angkatan);
         const r = await fetch(u.toString(), {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });

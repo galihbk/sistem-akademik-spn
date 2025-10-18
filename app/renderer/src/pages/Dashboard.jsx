@@ -164,12 +164,6 @@ function ServerStatus() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <code
-            className="badge"
-            style={{ background: "#111827", color: "#cbd5e1" }}
-          >
-            {API}
-          </code>
           <button className="btn" onClick={runCheck} title="Cek ulang">
             Cek Ulang
           </button>

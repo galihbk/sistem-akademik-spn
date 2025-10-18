@@ -260,13 +260,17 @@ export default function Settings() {
       )}
 
       <div className="card">
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Info Aplikasi</div>
-        <div style={{ color: "#cbd5e1" }}>
-          SISTEM AKADEMIK — versi pengembangan
+        <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 4 }}>
+          Info Aplikasi
         </div>
-        <div className="badge" style={{ marginTop: 8 }}>
-          Build: Electron + React + Express
+        <div style={{ color: "#cbd5e1", fontWeight: 700 }}>
+          Bhayangkara Student Management System (BSMS) — SPN PURWOKERTO
         </div>
+        <p className="muted" style={{ marginTop: 8, lineHeight: 1.5 }}>
+          BSMS adalah sistem manajemen data siswa untuk kebutuhan SPN
+          Purwokerto, membantu pengelolaan biodata, penilaian, dokumen, hingga
+          ekspor laporan. Fokusnya: cepat, rapi, dan mudah diaudit.
+        </p>
       </div>
     </div>
   );

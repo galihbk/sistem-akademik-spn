@@ -205,14 +205,16 @@ exports.rekap = async (req, res) => {
     if (angkatan) {
       params.push(angkatan);
       angkatanIdx = params.length;
-      whereS += ` AND TRIM(s.kelompok_angkatan) = TRIM($${angkatanIdx})`;
+      // ⬇️ case/trim-insensitive
+      whereS += ` AND LOWER(TRIM(s.kelompok_angkatan)) = LOWER(TRIM($${angkatanIdx}))`;
     }
 
     let jenisIdx = null;
     if (jenis) {
       params.push(jenis);
       jenisIdx = params.length;
-      whereS += ` AND TRIM(COALESCE(s.jenis_pendidikan,'')) = TRIM($${jenisIdx})`;
+      // ⬇️ case/trim-insensitive
+      whereS += ` AND LOWER(TRIM(COALESCE(s.jenis_pendidikan,''))) = LOWER(TRIM($${jenisIdx}))`;
     }
 
     // ---- hitung total siswa match
@@ -255,7 +257,7 @@ exports.rekap = async (req, res) => {
           END AS nilai_num
         FROM mapel m
         JOIN match mm ON mm.id = m.siswa_id
-        ${mapel ? `WHERE m.mapel = $${mapelIdx}` : ""}
+        ${mapel ? `WHERE LOWER(m.mapel) = LOWER($${mapelIdx})` : ""}
       ),
       agg AS (
         SELECT
@@ -293,21 +295,24 @@ exports.rekap = async (req, res) => {
           angkatan || jenis
             ? `WHERE ${[
                 angkatan
-                  ? `TRIM(s.kelompok_angkatan) = TRIM($${angkatanIdx})`
+                  ? `LOWER(TRIM(s.kelompok_angkatan)) = LOWER(TRIM($${angkatanIdx}))`
                   : null,
                 jenis
-                  ? `TRIM(COALESCE(s.jenis_pendidikan,'')) = TRIM($${jenisIdx})`
+                  ? `LOWER(TRIM(COALESCE(s.jenis_pendidikan,''))) = LOWER(TRIM($${jenisIdx}))`
                   : null,
               ]
                 .filter(Boolean)
                 .join(" AND ")}`
             : ""
         }
-        ${
-          mapel
-            ? `${angkatan || jenis ? "AND" : "WHERE"} m.mapel = $${mapelIdx}`
-            : ""
-        }
+${
+  mapel
+    ? `${
+        angkatan || jenis ? "AND" : "WHERE"
+      } LOWER(m.mapel) = LOWER($${mapelIdx})`
+    : ""
+}
+
         GROUP BY s.id, s.batalion, s.ton
       ),
       ranked AS (
@@ -363,17 +368,19 @@ exports.rekap = async (req, res) => {
     const weeksParams = [];
     if (angkatan) {
       weeksParams.push(angkatan);
-      weeksConds.push(`TRIM(s.kelompok_angkatan)=TRIM($${weeksParams.length})`);
+      weeksConds.push(
+        `LOWER(TRIM(s.kelompok_angkatan)) = LOWER(TRIM($${weeksParams.length}))`
+      );
     }
     if (jenis) {
       weeksParams.push(jenis);
       weeksConds.push(
-        `TRIM(COALESCE(s.jenis_pendidikan,''))=TRIM($${weeksParams.length})`
+        `LOWER(TRIM(COALESCE(s.jenis_pendidikan,''))) = LOWER(TRIM($${weeksParams.length}))`
       );
     }
     if (mapel) {
       weeksParams.push(mapel);
-      weeksConds.push(`m.mapel = $${weeksParams.length}`);
+      weeksConds.push(`LOWER(m.mapel) = LOWER($${weeksParams.length})`);
     }
 
     const weeksSql = `

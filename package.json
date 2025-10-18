@@ -2,15 +2,56 @@
   "name": "sistem-akademik-root",
   "private": true,
   "version": "1.0.0",
-  "devDependencies": {
-    "concurrently": "^9.0.0",
-    "cross-env": "^7.0.3",
-    "wait-on": "^8.0.0"
-  },
+  "description": "Bhayangkara Student Management System (BSMS) — SPN Purwokerto",
+  "author": "SPN Purwokerto",
+  "main": "app/electron/main.js",
   "scripts": {
     "dev:server": "npm --prefix server run dev",
     "dev:renderer": "npm --prefix app/renderer run dev",
     "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development RENDERER_URL=http://localhost:5173 npm --prefix app/electron run dev",
-    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:renderer\" \"npm:dev:electron\""
+    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "build:renderer": "npm --prefix app/renderer run build",
+    "dist:win": "npm run build:renderer && electron-builder -w",
+    "dist:portable": "npm run build:renderer && electron-builder -w portable"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "cross-env": "^7.0.3",
+    "electron": "^30.5.1",
+    "electron-builder": "^26.0.12",
+    "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "id.bsms.spn.purwokerto",
+    "productName": "BSMS SPN Purwokerto",
+    "asar": true,
+    "files": [
+      "app/electron/**/*",
+      "app/renderer/dist/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "bsms.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "BSMS SPN Purwokerto"
+    }
   }
 }

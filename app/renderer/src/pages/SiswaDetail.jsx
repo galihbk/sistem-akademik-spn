@@ -1745,29 +1745,51 @@ export default function SiswaDetail({ nik }) {
 
   const [dlMsg, setDlMsg] = useState("");
   const [dlPct, setDlPct] = useState(null);
+  const exportPendingTimer = useRef(null);
+  const currentExportKey = useRef(null);
 
   // === REF: bungkus konten tab untuk ditangkap HTML2Canvas
   const tabContentRef = useRef(null);
-
+  const clearBanner = () => {
+    setDlMsg("");
+    setDlPct(null);
+  };
   useEffect(() => {
     if (!window.electronAPI?.onDownloadStatus) return;
     const off = window.electronAPI.onDownloadStatus((p) => {
-      const label = p.isExport ? "Export" : "Download";
+      // matikan penyangga banner
+      if (exportPendingTimer.current) {
+        clearInterval(exportPendingTimer.current);
+        exportPendingTimer.current = null;
+      }
+
+      // deteksi apakah event ini milik export PDF server
+      const isExportEvent =
+        // match by route (lebih kuat)
+        (p.url && p.url.includes(EXPORT_ROUTE)) ||
+        // atau match by nama file yang dihasilkan backend
+        (p.filename &&
+          currentExportKey.current?.expectedNamePrefix &&
+          p.filename.startsWith(currentExportKey.current.expectedNamePrefix));
+
+      // kalau bukan event export kita, jangan ubah banner
+      if (!isExportEvent) return;
+
       if (p.state === "started") {
         setDlPct(0);
-        setDlMsg(`${label} "${p.filename}" → ${p.path}`);
+        setDlMsg(`Export "${p.filename}" → ${p.path}`);
       } else if (p.state === "progress") {
         setDlPct(p.percent ?? null);
       } else if (p.state === "completed") {
-        setDlPct(100);
-        setDlMsg(`✅ ${label} selesai: "${p.filename}" disimpan di\n${p.path}`);
-        setTimeout(() => {
-          setDlMsg("");
-          setDlPct(null);
-        }, 6000);
+        // langsung tutup banner (toast dari Electron sudah tampil sendiri)
+        clearBanner();
+        currentExportKey.current = null;
       } else if (p.state === "failed") {
         setDlPct(null);
-        setDlMsg(`❌ ${label} gagal: ${p.error || "unknown"}`);
+        setDlMsg(`❌ Export gagal: ${p.error || "unknown"}`);
+        // beri waktu user baca error lalu bersihkan
+        setTimeout(() => clearBanner(), 6000);
+        currentExportKey.current = null;
       }
     });
     return () => off && off();
@@ -1789,6 +1811,10 @@ export default function SiswaDetail({ nik }) {
     })();
     return () => {
       alive = false;
+      if (exportPendingTimer.current) {
+        clearInterval(exportPendingTimer.current);
+        exportPendingTimer.current = null;
+      }
     };
   }, [safeNik]);
 
@@ -2315,7 +2341,15 @@ export default function SiswaDetail({ nik }) {
     const url = `${API}/export/all-by-nik.pdf?nik=${encodeURIComponent(
       biodata.nik
     )}`;
-
+    const expectedNamePrefix = `Laporan_Siswa_${biodata.nik}_`;
+    currentExportKey.current = { url, expectedNamePrefix };
+    setDlMsg("🔄 Menyiapkan export PDF di server…");
+    setDlPct(null);
+    if (exportPendingTimer.current) clearInterval(exportPendingTimer.current);
+    // Jaga pesan tetap hidup kalau event 'started' belum datang (server masih render)
+    exportPendingTimer.current = setInterval(() => {
+      setDlMsg((m) => m || "🔄 Menyiapkan export PDF di server…");
+    }, 4000);
     // HEAD sering tidak disupport oleh stream PDF; toleransi 405/501
     fetch(url, { method: "HEAD" })
       .then((r) => {
@@ -2324,16 +2358,41 @@ export default function SiswaDetail({ nik }) {
         }
         if (window.electronAPI?.download) {
           window.electronAPI.download(url); // <- HTTP langsung, bukan blob:
+          // -> Banner jangan dibiarkan nongkrong.
+          if (exportPendingTimer.current) {
+            clearInterval(exportPendingTimer.current);
+            exportPendingTimer.current = null;
+          }
+          setDlMsg(""); // sembunyikan banner
+          setDlPct(null);
+          return; // selesai, toast dari Electron yang akan tampil
         } else {
+          setDlMsg("⬇️ Mengunduh file export…");
+          setDlPct(null);
           const a = document.createElement("a");
           a.href = url;
           a.download = "";
           document.body.appendChild(a);
           a.click();
           a.remove();
+          setTimeout(() => {
+            setDlMsg("");
+            setDlPct(null);
+          }, 6000);
         }
       })
-      .catch((e) => alert(e.message || "Gagal memulai export"));
+      .catch((e) => {
+        if (exportPendingTimer.current) {
+          clearInterval(exportPendingTimer.current);
+          exportPendingTimer.current = null;
+        }
+        alert(e.message || "Gagal memulai export");
+        setDlMsg(`❌ Export gagal: ${e?.message || "unknown"}`);
+        setDlPct(null);
+        setTimeout(() => {
+          setDlMsg("");
+        }, 6000);
+      });
   }
 
   return (

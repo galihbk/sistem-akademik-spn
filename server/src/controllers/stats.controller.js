@@ -25,13 +25,17 @@ async function summary(req, res) {
     const wp = [];
     if (qAngkatan) {
       ws.push(
-        `COALESCE(NULLIF(TRIM(kelompok_angkatan), ''), '') = $${wp.length + 1}`
+        `LOWER(COALESCE(NULLIF(TRIM(kelompok_angkatan), ''), '')) = LOWER($${
+          wp.length + 1
+        })`
       );
       wp.push(qAngkatan);
     }
     if (qJenis) {
       ws.push(
-        `COALESCE(NULLIF(TRIM(jenis_pendidikan), ''), '') = $${wp.length + 1}`
+        `LOWER(COALESCE(NULLIF(TRIM(jenis_pendidikan), ''), '')) = LOWER($${
+          wp.length + 1
+        })`
       );
       wp.push(qJenis);
     }
@@ -77,13 +81,13 @@ async function summary(req, res) {
     if (qAngkatan) {
       pdfParams.push(qAngkatan);
       conds.push(
-        `COALESCE(NULLIF(TRIM(s.kelompok_angkatan),''), '') = $${pdfParams.length}`
+        `LOWER(COALESCE(NULLIF(TRIM(s.kelompok_angkatan),''), '')) = LOWER($${pdfParams.length})`
       );
     }
     if (qJenis) {
       pdfParams.push(qJenis);
       conds.push(
-        `COALESCE(NULLIF(TRIM(s.jenis_pendidikan),''), '') = $${pdfParams.length}`
+        `LOWER(COALESCE(NULLIF(TRIM(s.jenis_pendidikan),''), '')) = LOWER($${pdfParams.length})`
       );
     }
     const existsS = conds.length ? ` AND ${conds.join(" AND ")}` : "";
@@ -121,13 +125,13 @@ async function summary(req, res) {
     if (qAngkatan) {
       trendParams.push(qAngkatan);
       trendConds.push(
-        `COALESCE(NULLIF(TRIM(s.kelompok_angkatan), ''), '') = $${trendParams.length}`
+        `LOWER(COALESCE(NULLIF(TRIM(s.kelompok_angkatan), ''), '')) = LOWER($${trendParams.length})`
       );
     }
     if (qJenis) {
       trendParams.push(qJenis);
       trendConds.push(
-        `COALESCE(NULLIF(TRIM(s.jenis_pendidikan), ''), '') = $${trendParams.length}`
+        `LOWER(COALESCE(NULLIF(TRIM(s.jenis_pendidikan), ''), '')) = LOWER($${trendParams.length})`
       );
     }
     const trendWhere = trendConds.length
@@ -139,7 +143,7 @@ async function summary(req, res) {
       WITH days AS (
         SELECT generate_series(
           date_trunc('day', NOW()) - INTERVAL '${TREND_DAYS - 1} day',
-          date_trunc('day', NOW()),
+          date_trunc('day', NOW() ),
           '1 day'
         )::date AS d
       )
@@ -163,13 +167,13 @@ async function summary(req, res) {
     if (qAngkatan) {
       pdf30Params.push(qAngkatan);
       pdf30Conds.push(
-        `COALESCE(NULLIF(TRIM(s.kelompok_angkatan),''), '') = $${pdf30Params.length}`
+        `LOWER(COALESCE(NULLIF(TRIM(s.kelompok_angkatan),''), '')) = LOWER($${pdf30Params.length})`
       );
     }
     if (qJenis) {
       pdf30Params.push(qJenis);
       pdf30Conds.push(
-        `COALESCE(NULLIF(TRIM(s.jenis_pendidikan),''), '') = $${pdf30Params.length}`
+        `LOWER(COALESCE(NULLIF(TRIM(s.jenis_pendidikan),''), '')) = LOWER($${pdf30Params.length})`
       );
     }
     const condExpr = pdf30Conds.length
@@ -210,12 +214,6 @@ async function summary(req, res) {
 
 async function recentActivity(req, res) {
   try {
-    // Disimpan untuk konsistensi query param; saat ini belum dipakai filter ke audit_log
-    const _qAngkatan = sanitizeAngkatan(req.query.angkatan);
-    const _qJenis = sanitizeJenis(
-      req.query.jenis || req.query.jenis_pendidikan
-    );
-
     const rows = (
       await pool.query(
         `
@@ -226,7 +224,6 @@ async function recentActivity(req, res) {
         `
       )
     ).rows;
-
     res.json({ items: rows });
   } catch (e) {
     console.error("[stats.recent]", e);

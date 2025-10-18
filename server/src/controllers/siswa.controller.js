@@ -132,7 +132,7 @@ async function list(req, res) {
   try {
     const q = (req.query.q || "").trim().toLowerCase();
     const angkatan = (req.query.angkatan || "").trim();
-    const jenis = (req.query.jenis || req.query.jenis_pendidikan || "").trim(); // <== TAMBAH: jenis pendidikan
+    const jenis = (req.query.jenis || req.query.jenis_pendidikan || "").trim();
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const limit = Math.min(
       Math.max(parseInt(req.query.limit || "20", 10), 1),
@@ -160,11 +160,13 @@ async function list(req, res) {
     }
     if (angkatan) {
       params.push(angkatan);
-      where += ` AND TRIM(kelompok_angkatan) = TRIM($${params.length})`;
+      // ⬇️ case/trim-insensitive untuk kelompok_angkatan
+      where += ` AND LOWER(TRIM(kelompok_angkatan)) = LOWER(TRIM($${params.length}))`;
     }
     if (jenis) {
       params.push(jenis);
-      where += ` AND TRIM(COALESCE(jenis_pendidikan,'')) = TRIM($${params.length})`; // <== TAMBAH: filter jenis_pendidikan
+      // ⬇️ case/trim-insensitive untuk jenis_pendidikan
+      where += ` AND LOWER(TRIM(COALESCE(jenis_pendidikan,''))) = LOWER(TRIM($${params.length}))`;
     }
 
     const sqlData = `
@@ -190,7 +192,7 @@ async function list(req, res) {
       sort_dir: sortDir,
       q,
       angkatan,
-      jenis, // echo
+      jenis, // echo balik
     });
   } catch (e) {
     console.error("[siswa.list]", e);

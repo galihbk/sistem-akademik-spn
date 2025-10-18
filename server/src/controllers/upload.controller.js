@@ -93,13 +93,6 @@ async function uploadPdf(req, res) {
     return res.status(400).json({ message: "File bukan PDF yang valid." });
   }
 
-  // (Opsional) batasi ukuran file
-  // const maxBytes = 25 * 1024 * 1024; // 25MB
-  // if (file.size > maxBytes) {
-  //   safeUnlink(file.path);
-  //   return res.status(413).json({ message: "File terlalu besar (>25MB)." });
-  // }
-
   // Pastikan siswa_id valid
   try {
     const s = await pool.query("SELECT id FROM siswa WHERE id=$1 LIMIT 1", [
@@ -172,8 +165,8 @@ function deleteDoc(kind) {
 }
 
 /**
- * (Opsional) GET /bk atau /pelanggaran – untuk riwayat list
- * Dipakai oleh halaman UploadPdf riwayat
+ * (Baru) GET /bk atau /pelanggaran – untuk riwayat list
+ * Mendukung filter ?angkatan=... & ?jenis=...
  */
 function listDocs(kind) {
   const table = kind === "pelanggaran" ? "pelanggaran" : "bk";
@@ -191,22 +184,63 @@ function listDocs(kind) {
         ? String(req.query.sort_dir).toLowerCase()
         : "desc";
 
-      const cnt = await pool.query(
-        `SELECT COUNT(*)::int AS total FROM ${table}`
-      );
-      const sql = `
-        SELECT d.id, d.siswa_id, d.judul, d.tanggal, d.file_path, d.created_at,
-               s.nosis, s.nama
+      // ---- normalisasi filter dari query
+      const angkatanRaw = (req.query.angkatan || "").trim();
+      const jenisRaw = (
+        req.query.jenis ||
+        req.query.jenis_pendidikan ||
+        ""
+      ).trim();
+
+      // ---- bangun WHERE di JOIN siswa
+      const conds = [];
+      const params = [];
+
+      if (angkatanRaw) {
+        // pakai LOWER(TRIM(...)) supaya aman dari kapitalisasi & spasi
+        params.push(angkatanRaw.toLowerCase());
+        conds.push(
+          `LOWER(TRIM(COALESCE(s.kelompok_angkatan,''))) = $${params.length}`
+        );
+      }
+
+      if (jenisRaw) {
+        // bikin lebih toleran: LIKE berbasis LOWER,
+        // sehingga variasi "Dikbangspes " / "dikbang spes" tetap lolos
+        params.push(`%${jenisRaw.toLowerCase().trim()}%`);
+        conds.push(
+          `LOWER(COALESCE(s.jenis_pendidikan,'')) LIKE $${params.length}`
+        );
+      }
+
+      const whereJoin = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+
+      const cntSql = `
+        SELECT COUNT(*)::int AS total
         FROM ${table} d
         LEFT JOIN siswa s ON s.id = d.siswa_id
-        ORDER BY d.created_at ${sortDir}
-        LIMIT $1 OFFSET $2
+        ${whereJoin}
       `;
-      const { rows } = await pool.query(sql, [limit, offset]);
+
+      const dataSql = `
+        SELECT
+          d.id, d.siswa_id, d.judul, d.tanggal, d.file_path, d.created_at,
+          s.nosis, s.nama
+        FROM ${table} d
+        LEFT JOIN siswa s ON s.id = d.siswa_id
+        ${whereJoin}
+        ORDER BY d.created_at ${sortDir}
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+      `;
+
+      const [{ rows: cntRows }, { rows }] = await Promise.all([
+        pool.query(cntSql, params),
+        pool.query(dataSql, [...params, limit, offset]),
+      ]);
 
       res.json({
         items: rows,
-        total: cnt.rows?.[0]?.total ?? rows.length,
+        total: cntRows?.[0]?.total ?? rows.length,
         page,
         limit,
         sort_dir: sortDir,

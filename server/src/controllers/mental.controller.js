@@ -26,8 +26,10 @@ async function rekap(req, res) {
       : "asc";
 
     // WHERE dinamis utk siswa (count + page CTE + weeks)
+    // WHERE dinamis utk siswa (count + page CTE + weeks)
     const params = [];
     let where = "WHERE 1=1";
+
     if (q) {
       params.push(`%${q}%`);
       const idx = params.length;
@@ -38,14 +40,16 @@ async function rekap(req, res) {
     if (angkatan) {
       params.push(angkatan);
       angkatanIdx = params.length;
-      where += ` AND TRIM(s.kelompok_angkatan) = TRIM($${angkatanIdx})`;
+      // ⬇️ case/trim-insensitive
+      where += ` AND LOWER(TRIM(s.kelompok_angkatan)) = LOWER(TRIM($${angkatanIdx}))`;
     }
 
     let jenisIdx = null;
     if (jenis) {
       params.push(jenis);
       jenisIdx = params.length;
-      where += ` AND TRIM(COALESCE(s.jenis_pendidikan,'')) = TRIM($${jenisIdx})`;
+      // ⬇️ case/trim-insensitive
+      where += ` AND LOWER(TRIM(COALESCE(s.jenis_pendidikan,''))) = LOWER(TRIM($${jenisIdx}))`;
     }
 
     // total siswa yang match

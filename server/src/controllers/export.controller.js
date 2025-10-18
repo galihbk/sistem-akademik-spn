@@ -2,7 +2,7 @@
 const path = require("path");
 const fs = require("fs/promises");
 const pool = require("../db/pool");
-const { PDFDocument } = require("pdf-lib");
+const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
 const mime = require("mime-types");
 const puppeteer = require("puppeteer");
 const ExcelJS = require("exceljs"); // untuk export Excel
@@ -82,7 +82,7 @@ async function getAllDataByNik(nik) {
       [siswaId]
     ),
     pool.query(
-      `SELECT id, siswa_id, judul, tingkat, deskripsi, tanggal, created_at
+      `SELECT id, siswa_id, judul, tingkat, deskripsi, tanggal, file_path, created_at
          FROM prestasi
         WHERE siswa_id = $1
         ORDER BY tanggal ASC`,
@@ -93,7 +93,7 @@ async function getAllDataByNik(nik) {
       [siswaId]
     ),
     pool.query(
-      `SELECT id, siswa_id, judul, deskripsi, tanggal, created_at
+      `SELECT id, siswa_id, judul, deskripsi, tanggal, file_path, created_at
          FROM riwayat_kesehatan
         WHERE siswa_id = $1
         ORDER BY tanggal ASC`,
@@ -118,6 +118,72 @@ async function getAllDataByNik(nik) {
 /* =========================================================================
    =                         UTIL FORMAT & HTML                            =
    ========================================================================= */
+function stripFilePath(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.map((r) => ({
+    ...r,
+    file_path: r?.file_path ? path.basename(String(r.file_path)) : null,
+  }));
+}
+function tblMapelPivot(title, rows) {
+  if (!rows || rows.length === 0) {
+    return `
+      <h3 class="section-title">${esc(title)}</h3>
+      <div class="muted">Belum ada data.</div>
+      <div class="pb-12"></div>
+    `;
+  }
+
+  // Kelompokkan per mapel (dan semester bila ada)
+  const groups = new Map();
+  let maxPert = 0;
+
+  for (const r of rows) {
+    const mapel = String(r.mapel ?? "").trim() || "-";
+    const semester =
+      r.semester != null && r.semester !== "" ? String(r.semester) : null;
+    const key = semester ? `${mapel}|||${semester}` : mapel;
+    if (!groups.has(key)) groups.set(key, {});
+    const g = groups.get(key);
+
+    const pertemuan = parseInt(r.pertemuan, 10);
+    if (Number.isFinite(pertemuan) && pertemuan > 0) {
+      g[pertemuan] = r.nilai ?? "";
+      maxPert = Math.max(maxPert, pertemuan);
+    }
+  }
+
+  // Header
+  const headExtra = Array.from(
+    { length: maxPert },
+    (_, i) => `<th>Pertemuan ${i + 1}</th>`
+  ).join("");
+  const head = `<tr><th>Mapel</th>${headExtra}</tr>`;
+
+  // Body
+  const body = Array.from(groups.entries())
+    .map(([key, vals]) => {
+      const [mapel, semester] = key.includes("|||")
+        ? key.split("|||")
+        : [key, null];
+      const label = semester ? `${mapel} (Smt ${semester})` : mapel;
+      const tds = Array.from({ length: maxPert }, (_, i) => {
+        const v = vals[i + 1] ?? "";
+        return `<td>${esc(v)}</td>`;
+      }).join("");
+      return `<tr><td>${esc(label)}</td>${tds}</tr>`;
+    })
+    .join("");
+
+  return `
+    <h3 class="section-title">${esc(title)}</h3>
+    <table class="t">
+      <thead>${head}</thead>
+      <tbody>${body}</tbody>
+    </table>
+    <div class="pb-12"></div>
+  `;
+}
 
 function esc(s) {
   if (s == null) return "";
@@ -182,6 +248,7 @@ function tblWithoutMeta(title, rows) {
     "created_at",
     "updated_at",
     "file_path",
+    "meta", // <-- sembunyikan kolom META
   ]);
   const cols = Object.keys(rows[0]).filter((k) => !HIDDEN.has(k));
   const head = cols
@@ -352,7 +419,12 @@ function buildHeaderFooterTemplates({
 
   return { headerTemplate: header, footerTemplate: footer };
 }
-
+function cleanRelPath(p) {
+  if (!p) return "";
+  return String(p)
+    .replace(/^\/+/, "")
+    .replace(/^uploads[\\/]/i, "");
+}
 function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
   const instansi = "SEKOLAH POLISI NEGARA (SPN) PURWOKERTO";
   const alamat =
@@ -384,12 +456,11 @@ function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
 <title>${dokTitle} - ${esc(siswa?.nama || "")}</title>
 <style>
   /* --------- Tipografi & Layout Cetak Formal --------- */
-  @page { size: A4; margin: 22mm 16mm 20mm 16mm; }
-  body { font-family: "Times New Roman", Times, serif; color: #111; font-size: 11.5pt; }
-  h1, h2, h3 { margin: 0 0 8px 0; }
-  h1 { font-size: 18pt; letter-spacing: .2pt; text-align:center; text-transform: uppercase; }
-  h2 { font-size: 14pt; margin-top: 16px; text-transform: uppercase; }
-  h3.section-title { font-size: 12.5pt; margin: 14px 0 6px; border-bottom: 1px solid #333; padding-bottom: 3px; }
+@page { size: A4; margin: 22mm 16mm 20mm 16mm; }
+  body { font-family: "Times New Roman", Times, serif; color: #111; font-size: 10.25pt; }
+  h1 { font-size: 16pt; letter-spacing: .2pt; text-align:center; text-transform: uppercase; }
+  h2 { font-size: 12.5pt; margin-top: 14px; text-transform: uppercase; }
+  h3.section-title { font-size: 11.25pt; margin: 12px 0 6px; border-bottom: 1px solid #333; padding-bottom: 2px; }padding-bottom: 3px; }
   .muted { color:#444; }
   .pb-12 { padding-bottom: 12px; }
 
@@ -408,11 +479,11 @@ function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
   /* Kop & Cover */
   .cover { page-break-after: always; }
   .kop { text-align: center; margin-bottom: 24px; }
-  .kop .instansi { font-weight: 700; font-size: 16pt; letter-spacing:.4pt; }
-  .kop .sub { font-size: 10.5pt; margin-top: 4px; }
-  .kop hr { margin-top: 10px; border:0; border-top: 2px solid #000; }
-  .kop .alamat { font-size: 10pt; margin-top:6px; }
-  .kop .logo { width: 48px; height: 48px; object-fit: contain; display:inline-block; vertical-align: middle; margin-right:8px; }
+.kop .instansi { font-weight: 700; font-size: 16pt; letter-spacing:.4pt; line-height: 1.2; }
+.kop .instansi .l1 { display:block; }
+.kop .instansi .l2 { display:block; }
+.kop .alamat { font-size: 10pt; margin-top:6px; }
+.kop .logo { width: 64px; height: 64px; object-fit: contain; display:inline-block; vertical-align: middle; margin-right:10px; } // <-- 64px (lebih besar)
 
   .ident {
     margin-top: 24px;
@@ -421,10 +492,9 @@ function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
     gap: 16px;
   }
   .box { border: 1px solid #000; padding: 12px; border-radius: 2px; }
-  .kv { width: 100%; border-collapse: collapse; }
-  .kv th, .kv td { padding: 6px 8px; border-bottom: 1px solid #e5e5e5; vertical-align: top; }
-  .kv th { width: 42%; font-weight: 700; text-align: left; }
-  .foto { width: 42mm; height: 56mm; object-fit: cover; border: 1px solid #333; display:block; margin: 0 auto; }
+   .kv th, .kv td { padding: 5px 7px; border-bottom: 1px solid #e5e5e5; vertical-align: top; }
+ .kv th { width: 40%; font-weight: 700; text-align: left; }
+  .foto { width: 38mm; height: 50mm; object-fit: cover; border: 1px solid #333; display:block; margin: 0 auto; }
   .foto-empty { display:flex; align-items:center; justify-content:center; background:#f6f6f6; color:#777; }
 
   .bio-grid { display:grid; grid-template-columns: 1fr 48mm; gap: 16px; }
@@ -437,7 +507,7 @@ function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
 
   /* Tabel data */
   table.t { width:100%; border-collapse: collapse; }
-  table.t th, table.t td { border: 1px solid #000; padding: 6px 8px; }
+  table.t th, table.t td { border: 1px solid #000; padding: 5px 7px; }
   table.t thead th { background:#f2f2f2; }
 
   /* Kartu Jasmani (tanpa tabel) */
@@ -452,6 +522,12 @@ function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
   .signed .sigbox { text-align:center; }
   .signed .sigbox .space { height: 48px; }
   .note { font-size: 9.5pt; color:#444; margin-top:8px; }
+/* --- di dalam <style> global --- */
+table.t { width:100%; border-collapse: collapse; table-layout: fixed; } /* fixed layout */
+table.t th, table.t td { border: 1px solid #000; padding: 6px 8px; font-size: 10pt; }
+table.t th { background:#f2f2f2; }
+table.t th, table.t td { word-break: break-word; overflow-wrap: anywhere; } /* patahkan kata panjang */
+.kv th, .kv td { word-break: break-word; overflow-wrap: anywhere; }          /* juga untuk tabel identitas */
 
   /* Penomoran halaman ada di footer puppeteer */
 </style>
@@ -461,17 +537,20 @@ function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
 <!-- COVER -->
 <section class="cover">
   <div class="kop">
-    <div>
-      ${
-        logoDataUri
-          ? `<img class="logo" src="${logoDataUri}" alt="Logo SPN" />`
-          : ""
-      }
-      <span class="instansi"> ${instansi}</span>
-    </div>
-    <hr />
-    <div class="alamat">${esc(alamat)}</div>
+  <div>
+    ${
+      logoDataUri
+        ? `<img class="logo" src="${logoDataUri}" alt="Logo SPN" />`
+        : ""
+    }
+    <span class="instansi">
+      <span class="l1">SEKOLAH POLISI NEGARA (SPN)</span>
+      <span class="l2">PURWOKERTO</span>
+    </span>
   </div>
+  <hr />
+  <div class="alamat">${esc(alamat)}</div>
+</div>
 
   <h1>${dokTitle}</h1>
   <div style="text-align:center; margin-top: 8px;">${esc(
@@ -502,7 +581,7 @@ function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
   </div>
 </section>
 
-<div class="watermark">SPN</div>
+<div class="watermark">SPN Purwokerto</div>
 
 <!-- BAGIAN: MENTAL (tanpa META) -->
 <section>
@@ -511,21 +590,21 @@ function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
 
 <!-- BAGIAN: BK (tetap) -->
 <section>
-  ${tbl("BK (DAFTAR DOKUMEN)", tabs.bk)}
+  ${tbl("BK (DAFTAR DOKUMEN)", stripFilePath(tabs.bk))}
   <div class="note">Lampiran berkas akan disertakan pada bagian “Lampiran Dokumen”.</div>
   <div class="pb-12"></div>
 </section>
 
 <!-- BAGIAN: PELANGGARAN (tetap) -->
 <section>
-  ${tbl("PELANGGARAN (DAFTAR DOKUMEN)", tabs.pelanggaran)}
+  ${tbl("PELANGGARAN (DAFTAR DOKUMEN)", stripFilePath(tabs.pelanggaran))}
   <div class="note">Lampiran berkas akan disertakan pada bagian “Lampiran Dokumen”.</div>
   <div class="pb-12"></div>
 </section>
 
 <!-- BAGIAN: MAPEL (tanpa META) -->
 <section>
-  ${tblWithoutMeta("MAPEL", tabs.mapel)}
+  ${tblMapelPivot("MAPEL", tabs.mapel)}
 </section>
 
 <!-- BAGIAN: PRESTASI (tetap) -->
@@ -549,16 +628,17 @@ function buildReportHTML({ siswa, tabs, fotoDataUri, logoDataUri }) {
   <div class="signed">
     <div class="sigbox">
       Mengetahui,<br/>Kepala/Pembina Pendidikan<br/><div class="space"></div>
-      <span style="display:inline-block; border-top:1px solid #000; min-width:160px; margin-top:8px;">Nama Jelas</span><br/>
-      NRP/NIP. .........................
+      <span style="display:inline-block; border-top:1px solid #000; min-width:160px; margin-top:8px;"></span><br/>
+      NRP/NIP. .........................   <!-- tanpa "Nama Jelas" -->
     </div>
     <div class="sigbox">
       Disusun oleh,<br/>Staf/Admin Akademik<br/><div class="space"></div>
-      <span style="display:inline-block; border-top:1px solid #000; min-width:160px; margin-top:8px;">Nama Jelas</span><br/>
-      NRP/NIP. .........................
+      <span style="display:inline-block; border-top:1px solid #000; min-width:160px; margin-top:8px;"></span><br/>
+      NRP/NIP. .........................   <!-- tanpa "Nama Jelas" -->
     </div>
   </div>
 </section>
+
 
 <!-- LAMPIRAN -->
 <section style="page-break-before: always">
@@ -624,10 +704,57 @@ async function renderHTMLToPDF({ html, headerTemplate, footerTemplate }) {
 async function mergeWithAttachments(basePdfBuf, attachments) {
   let masterDoc = await PDFDocument.load(basePdfBuf);
 
+  // A4 & font siap dipakai oleh semua lampiran
+  const A4 = { w: 595.28, h: 841.89 }; // pt
+  const titleFont = await masterDoc.embedFont(StandardFonts.HelveticaBold);
+  const subFont = await masterDoc.embedFont(StandardFonts.Helvetica);
+  const TITLE_SIZE = 26;
+  const SUB_SIZE = 11;
+
   for (const att of attachments) {
     if (!att?.buffer || !att?.mime) continue;
-
     const m = String(att.mime).toLowerCase();
+
+    /* ===================== COVER (judul tengah) ===================== */
+    try {
+      const title = String(att.title || "Lampiran")
+        .trim()
+        .slice(0, 200);
+      const subtitle = String(att.name || "")
+        .trim()
+        .slice(0, 200);
+
+      const page = masterDoc.addPage([A4.w, A4.h]);
+
+      // hitung posisi tengah
+      const tWidth = titleFont.widthOfTextAtSize(title, TITLE_SIZE);
+      const tX = (A4.w - tWidth) / 2;
+      const tY = A4.h / 2 + TITLE_SIZE; // sedikit di atas titik tengah
+
+      page.drawText(title, {
+        x: Math.max(24, tX),
+        y: tY,
+        size: TITLE_SIZE,
+        font: titleFont,
+        color: rgb(0, 0, 0),
+      });
+
+      if (subtitle) {
+        const sWidth = subFont.widthOfTextAtSize(subtitle, SUB_SIZE);
+        const sX = (A4.w - sWidth) / 2;
+        const sY = tY - (TITLE_SIZE + 12);
+        page.drawText(subtitle, {
+          x: Math.max(24, sX),
+          y: sY,
+          size: SUB_SIZE,
+          font: subFont,
+          color: rgb(0.35, 0.35, 0.35),
+        });
+      }
+    } catch {
+      /* jika gagal cover, lanjutkan ke konten */
+    }
+    /* =================== /COVER (judul tengah) ===================== */
 
     try {
       if (m.includes("pdf")) {
@@ -640,30 +767,28 @@ async function mergeWithAttachments(basePdfBuf, attachments) {
         m.includes("jpeg") ||
         m.includes("webp")
       ) {
-        const imgDoc = await PDFDocument.create();
-        let img;
-        if (m.includes("png")) img = await imgDoc.embedPng(att.buffer);
-        else img = await imgDoc.embedJpg(att.buffer);
+        // 1 halaman A4, tempel image proporsional dengan margin
+        const imgPage = masterDoc.addPage([A4.w, A4.h]);
+        const marginX = 40; // kiri/kanan
+        const marginY = 80; // atas/bawah
+        const maxW = A4.w - marginX * 2;
+        const maxH = A4.h - marginY * 2;
 
-        // A4 portrait
-        const page = imgDoc.addPage([595.28, 841.89]);
-        const maxW = 595.28 - 48;
-        const maxH = 841.89 - 48;
-        let w = img.width,
-          h = img.height;
+        let img;
+        if (m.includes("png")) img = await masterDoc.embedPng(att.buffer);
+        else img = await masterDoc.embedJpg(att.buffer);
+
+        let w = img.width;
+        let h = img.height;
         const ratio = Math.min(maxW / w, maxH / h);
         w *= ratio;
         h *= ratio;
-        const x = (595.28 - w) / 2;
-        const y = (841.89 - h) / 2;
-        page.drawImage(img, { x, y, width: w, height: h });
 
-        const imgBuf = await imgDoc.save();
-        const src = await PDFDocument.load(imgBuf);
-        const pages = await masterDoc.copyPages(src, [0]);
-        masterDoc.addPage(pages[0]);
+        const x = (A4.w - w) / 2;
+        const y = (A4.h - h) / 2;
+        imgPage.drawImage(img, { x, y, width: w, height: h });
       } else {
-        continue; // tipe selain pdf/gambar di-skip
+        continue; // tipe selain PDF/IMG di-skip
       }
     } catch {
       continue; // lampiran bermasalah -> skip
@@ -724,19 +849,24 @@ async function exportAllByNik(req, res) {
     // Lampiran HANYA dari bk & pelanggaran (punya file_path)
     const fileRows = []
       .concat(data.tabs.bk || [])
-      .concat(data.tabs.pelanggaran || []);
+      .concat(data.tabs.pelanggaran || [])
+      .concat(data.tabs.prestasi || [])
+      .concat(data.tabs.riwayat_kesehatan || []);
 
     const attachments = [];
     for (const r of fileRows) {
       const p = r.file_path;
       if (!p) continue;
-      const buf = await tryReadFileBuffer(uploadsRoot, p);
+      const pClean = cleanRelPath(p); // <-- normalisasi 'uploads/'
+      const buf = await tryReadFileBuffer(uploadsRoot, pClean);
       if (!buf) continue;
-      const guessedMime = mime.lookup(p) || "application/octet-stream";
+      const guessedMime =
+        mime.lookup(pClean) || mime.lookup(p) || "application/pdf";
       attachments.push({
         buffer: buf,
         mime: guessedMime,
-        name: path.basename(p),
+        name: path.basename(pClean || p),
+        title: String(r.judul || "").trim() || "Lampiran",
       });
     }
 

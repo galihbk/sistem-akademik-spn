@@ -87,7 +87,7 @@ exports.remove = async (req, res) => {
 
 exports.list = async (req, res) => {
   try {
-    const q = (req.query.q || "").trim().toLowerCase();
+    const qText = (req.query.q || "").trim().toLowerCase();
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const limit = Math.min(
       Math.max(parseInt(req.query.limit || "20", 10), 1),
@@ -95,17 +95,42 @@ exports.list = async (req, res) => {
     );
     const offset = (page - 1) * limit;
 
+    // ⬇️ Tambahan filter
+    const angkatan = (req.query.angkatan || "").trim();
+    const jenis = (req.query.jenis || req.query.jenis_pendidikan || "").trim();
+
     const params = [];
-    let where = "WHERE 1=1";
-    if (q) {
-      params.push(`%${q}%`);
-      where += ` AND (
-        LOWER(p.judul) LIKE $${params.length} OR
-        LOWER(COALESCE(p.tingkat,'')) LIKE $${params.length} OR
-        LOWER(s.nama) LIKE $${params.length} OR
-        LOWER(s.nosis) LIKE $${params.length}
-      )`;
+    const conds = [];
+
+    // filter jenis/angkatan dari table siswa
+    if (angkatan) {
+      params.push(angkatan);
+      conds.push(
+        `LOWER(TRIM(COALESCE(s.kelompok_angkatan,''))) = LOWER(TRIM($${params.length}))`
+      );
     }
+    if (jenis) {
+      params.push(jenis);
+      conds.push(
+        `LOWER(TRIM(COALESCE(s.jenis_pendidikan,''))) = LOWER(TRIM($${params.length}))`
+      );
+    }
+
+    // filter q (judul/tingkat/nama/nosis)
+    if (qText) {
+      params.push(`%${qText}%`);
+      const idx = params.length;
+      conds.push(
+        `(
+          LOWER(p.judul) LIKE $${idx} OR
+          LOWER(COALESCE(p.tingkat,'')) LIKE $${idx} OR
+          LOWER(s.nama) LIKE $${idx} OR
+          LOWER(s.nosis) LIKE $${idx}
+        )`
+      );
+    }
+
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
 
     const sqlData = `
       SELECT
@@ -116,7 +141,7 @@ exports.list = async (req, res) => {
       JOIN siswa s ON s.id = p.siswa_id
       ${where}
       ORDER BY COALESCE(p.created_at, 'epoch'::timestamp) DESC, p.id DESC
-      LIMIT ${limit} OFFSET ${offset};
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2};
     `;
     const sqlCount = `
       SELECT COUNT(*)::int AS total
@@ -126,7 +151,7 @@ exports.list = async (req, res) => {
     `;
 
     const [data, count] = await Promise.all([
-      pool.query(sqlData, params),
+      pool.query(sqlData, [...params, limit, offset]),
       pool.query(sqlCount, params),
     ]);
     res.json({ items: data.rows, total: count.rows[0].total, page, limit });

@@ -91,6 +91,13 @@ function Modal({ open, onClose, title, children }) {
 export default function InputPrestasi() {
   const toast = useToast();
 
+  // ⬇️ BACA FILTER GLOBAL DARI LOCALSTORAGE
+  const jenis = useMemo(
+    () => localStorage.getItem("sa.jenis_pendidikan") || "",
+    []
+  );
+  const angkatan = useMemo(() => localStorage.getItem("ui.angkatan") || "", []);
+
   /* ---------- state: history ---------- */
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
@@ -137,9 +144,12 @@ export default function InputPrestasi() {
       u.searchParams.set("page", String(pageArg));
       u.searchParams.set("limit", String(limit));
       u.searchParams.set("sort_dir", "desc");
+      // ⬇️ KIRIM FILTER JENIS/ANGKATAN
+      if (jenis) u.searchParams.set("jenis", jenis);
+      if (angkatan) u.searchParams.set("angkatan", angkatan);
       return u.toString();
     },
-    [limit]
+    [limit, jenis, angkatan]
   );
 
   const fetchList = useCallback(
@@ -192,6 +202,10 @@ export default function InputPrestasi() {
         u.searchParams.set("q", q);
         u.searchParams.set("page", "1");
         u.searchParams.set("limit", "50");
+        // (opsional) ikutkan filter supaya suggestion siswa terbatasi juga
+        if (jenis) u.searchParams.set("jenis", jenis);
+        if (angkatan) u.searchParams.set("angkatan", angkatan);
+
         const r = await fetch(u.toString(), {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
@@ -220,7 +234,7 @@ export default function InputPrestasi() {
       stop = true;
       clearTimeout(t);
     };
-  }, [q, siswaId]);
+  }, [q, siswaId, jenis, angkatan]);
 
   // Tutup dropdown pada klik di luar / Esc
   useEffect(() => {

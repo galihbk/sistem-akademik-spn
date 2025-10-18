@@ -5,9 +5,16 @@ const fs = require("fs");
 const urlMod = require("url");
 const http = require("http");
 const https = require("https");
+const { nativeImage } = require("electron");
 
 let mainWindow = null;
-
+// Helper: resolve path aset (dev vs packaged)
+function assetPath(rel) {
+  const base = app.isPackaged
+    ? path.join(process.resourcesPath, "assets") // saat packaged
+    : path.join(__dirname, "assets"); // saat dev
+  return path.join(base, rel);
+}
 /* ================= Logger sederhana ================= */
 let LOG_FILE = null;
 function initLogger() {
@@ -50,6 +57,7 @@ let settingsCache = {
 let authToken = null;
 
 /* ================= BrowserWindow ================= */
+app.setAppUserModelId("BSMS.SPNPurwokerto");
 function createWindow() {
   try {
     const preloadPath = path.join(__dirname, "preload.js");
@@ -60,6 +68,7 @@ function createWindow() {
     mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
+      icon: nativeImage.createFromPath(assetPath("bsms.ico")),
       webPreferences: {
         preload: preloadPath,
         contextIsolation: true,
