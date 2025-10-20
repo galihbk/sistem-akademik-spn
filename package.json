@@ -5,44 +5,43 @@
   "description": "Bhayangkara Student Management System (BSMS) — SPN Purwokerto",
   "author": "SPN Purwokerto",
   "main": "app/electron/main.js",
-  "scripts": {
-    "dev:server": "npm --prefix server run dev",
-    "dev:renderer": "npm --prefix app/renderer run dev",
-    "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development RENDERER_URL=http://localhost:5173 npm --prefix app/electron run dev",
-    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:renderer\" \"npm:dev:electron\"",
-    "build:renderer": "npm --prefix app/renderer run build",
-    "dist:win": "npm run build:renderer && electron-builder -w",
-    "dist:portable": "npm run build:renderer && electron-builder -w portable"
-  },
   "devDependencies": {
     "concurrently": "^9.0.0",
     "cross-env": "^7.0.3",
-    "electron": "^30.5.1",
+    "electron": "^31.3.1",
     "electron-builder": "^26.0.12",
     "wait-on": "^8.0.0"
+  },
+  "scripts": {
+    "dev:renderer": "npm --prefix app/renderer run dev",
+    "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development RENDERER_URL=http://localhost:5173 npm --prefix app/electron run dev",
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "build:renderer": "npm --prefix app/renderer run build",
+    "dist:win": "npm run build:renderer && electron-builder -w -p never",
+    "dist": "npm run build:renderer && electron-builder",
+    "clean": "rimraf dist app/renderer/dist || rmdir /s /q dist app\\renderer\\dist"
   },
   "build": {
     "appId": "id.bsms.spn.purwokerto",
     "productName": "BSMS SPN Purwokerto",
-    "asar": true,
     "files": [
-      "app/electron/**/*",
-      "app/renderer/dist/**/*",
-      "package.json"
+      "app/electron/**",
+      "app/electron/assets/**",
+      "app/renderer/dist/**",
+      "!server/**",
+      "!**/*.map"
     ],
+    "asar": true,
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "app/electron/assets"
     },
     "win": {
+      "icon": "app/electron/assets/bsms.ico",
       "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "bsms.ico"
+        "nsis",
+        "zip"
+      ]
     },
     "nsis": {
       "oneClick": false,
