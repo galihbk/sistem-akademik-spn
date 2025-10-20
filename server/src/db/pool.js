@@ -10,7 +10,7 @@ const pool = hasUrl
     })
   : new Pool({
       user: process.env.PGUSER || "sa_user",
-      password: process.env.PGPASSWORD || "password",
+      password: process.env.PGPASSWORD || "spn2025",
       host: process.env.PGHOST || "localhost",
       port: Number(process.env.PGPORT || 5432),
       database: process.env.PGDATABASE || "sistem_akademik",
