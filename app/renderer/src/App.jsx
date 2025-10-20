@@ -46,7 +46,7 @@ function BrandBSMS() {
 }
 
 function Login({ onSuccess }) {
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [jenis, setJenis] = useState(
     () => localStorage.getItem("sa.jenis_pendidikan") || ""
