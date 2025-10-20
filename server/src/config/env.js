@@ -1,6 +1,6 @@
 const path = require('path');
 const dotenv = require('dotenv');
-dotenv.config({ path: path.join(__dirname, '../../.env') });
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const required = (key) => {
   if (!process.env[key]) throw new Error(`Missing env: ${key}`);
