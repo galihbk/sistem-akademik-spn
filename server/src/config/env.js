@@ -11,7 +11,7 @@ const required = (key) => {
 module.exports = {
   ADMIN_USER: process.env.ADMIN_USER || 'admin',
   ADMIN_PASS_PLAIN: process.env.ADMIN_PASS_PLAIN || '',
-  ADMIN_PASS_HASH: process.env.ADMIN_PASS_HASH || '',
+  ADMIN_PASS_HASH: process.env.ADMIN_PASS_HASH || '$2b$12$86OHu1DxQ1lT7A1zPeZw9OV2QsFSdmNajsSLbpOOQSLg0m2sHKmqa',
   JWT_SECRET: required('JWT_SECRET'),
   PORT: parseInt(process.env.PORT || '4000', 10)
 };
